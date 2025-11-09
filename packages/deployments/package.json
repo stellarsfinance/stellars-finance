@@ -1,0 +1,17 @@
+{
+  "name": "@stellars-finance/deployments",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./testnet.json": {
+      "import": "../../deployments/testnet.json",
+      "require": "../../deployments/testnet.json",
+      "types": "./index.d.ts"
+    },
+    "./mainnet.json": {
+      "import": "../../deployments/mainnet.json",
+      "require": "../../deployments/mainnet.json",
+      "types": "./index.d.ts"
+    }
+  }
+}

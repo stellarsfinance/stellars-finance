@@ -5,7 +5,7 @@
  * Allows users to mint test tokens to their wallet.
  */
 
-import { Client as TokenClient } from '../../../bindings/faucet-token/dist/index.js';
+import { Client as TokenClient } from '@stellars-finance/faucet-token';
 import { CONTRACT_ADDRESSES, getRpcUrl, getNetworkPassphrase } from '../config/contracts';
 import type { i128 } from '@stellar/stellar-sdk/contract';
 import { toContractAmount, fromContractAmount } from './liquidityPool';

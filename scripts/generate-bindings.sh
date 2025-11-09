@@ -42,6 +42,12 @@ for contract in "${CONTRACTS[@]}"; do
     --wasm "$WASM_PATH" \
     --output-dir "$contract"
 
+  # Update package.json to use @stellars-finance scope
+  if [ -f "$contract/package.json" ]; then
+    sed -i '' "s/\"name\": \"$contract\"/\"name\": \"@stellars-finance\/$contract\"/" "$contract/package.json"
+    echo "  → Updated package name to @stellars-finance/$contract"
+  fi
+
   echo "✓ $contract bindings generated"
 done
 

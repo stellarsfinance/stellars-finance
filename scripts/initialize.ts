@@ -20,11 +20,11 @@
 import 'dotenv/config';
 import { readFileSync } from 'fs';
 import { NETWORK_CONFIGS } from './config';
-import { Client as FaucetTokenClient } from '../bindings/faucet-token/src/index';
-import { Client as ConfigManagerClient } from '../bindings/config-manager/src/index';
-import { Client as OracleIntegratorClient } from '../bindings/oracle-integrator/src/index';
-import { Client as LiquidityPoolClient } from '../bindings/liquidity-pool/src/index';
-import { Client as PositionManagerClient } from '../bindings/position-manager/src/index';
+import { Client as FaucetTokenClient } from '@stellars-finance/faucet-token';
+import { Client as ConfigManagerClient } from '@stellars-finance/config-manager';
+import { Client as OracleIntegratorClient } from '@stellars-finance/oracle-integrator';
+import { Client as LiquidityPoolClient } from '@stellars-finance/liquidity-pool';
+import { Client as PositionManagerClient } from '@stellars-finance/position-manager';
 import { Keypair, TransactionBuilder } from '@stellar/stellar-sdk';
 
 type NetworkType = 'testnet' | 'mainnet';

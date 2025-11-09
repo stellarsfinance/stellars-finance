@@ -6,8 +6,8 @@
  */
 
 // Import deployment configuration
-import testnetDeployment from '../../../deployments/testnet.json';
-// import mainnetDeployment from '../../../deployments/mainnet.json'; // Uncomment when mainnet deployed
+import testnetDeployment from '@stellars-finance/deployments/testnet.json';
+// import mainnetDeployment from '@stellars-finance/deployments/mainnet.json'; // Uncomment when mainnet deployed
 
 export const NETWORK_CONFIG = {
   testnet: {

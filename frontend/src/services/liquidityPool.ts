@@ -5,8 +5,8 @@
  * Handles deposits, withdrawals, and balance queries.
  */
 
-import { Client as LiquidityPoolClient } from '../../../bindings/liquidity-pool/dist/index.js';
-import { Client as TokenClient } from '../../../bindings/faucet-token/dist/index.js';
+import { Client as LiquidityPoolClient } from '@stellars-finance/liquidity-pool';
+import { Client as TokenClient } from '@stellars-finance/faucet-token';
 import { CONTRACT_ADDRESSES, getRpcUrl, getNetworkPassphrase } from '../config/contracts';
 import type { i128 } from '@stellar/stellar-sdk/contract';
 

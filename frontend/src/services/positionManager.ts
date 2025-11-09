@@ -5,8 +5,8 @@
  * Handles opening, closing, and querying perpetual positions.
  */
 
-import { Client as PositionManagerClient } from '../../../bindings/position-manager/dist/index.js';
-import { Client as TokenClient } from '../../../bindings/faucet-token/dist/index.js';
+import { Client as PositionManagerClient } from '@stellars-finance/position-manager';
+import { Client as TokenClient } from '@stellars-finance/faucet-token';
 import { CONTRACT_ADDRESSES, getRpcUrl, getNetworkPassphrase } from '../config/contracts';
 import type { i128, u32, u64 } from '@stellar/stellar-sdk/contract';
 
