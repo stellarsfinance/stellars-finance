@@ -2,6 +2,7 @@
 
 Decentralized perpetuals trading platform built on Stellar/Soroban.
 
+
 ## Project Structure
 
 ```
