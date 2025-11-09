@@ -1,0 +1,67 @@
+import { useParams } from "react-router-dom";
+import Header from "@/components/Header";
+import TradeChart from "@/components/TradeChart";
+import TradePanel from "@/components/TradePanel";
+import PositionsPanel from "@/components/PositionsPanel";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { TRADING_PAIRS } from "@/types/market";
+import { usePrices } from "@/contexts/PriceContext";
+
+const Trade = () => {
+  const { pair } = useParams<{ pair: string }>();
+  const { getPrice } = usePrices();
+
+  // Find the current trading pair
+  const currentPair = TRADING_PAIRS.find((p) => p.displaySymbol === pair) || TRADING_PAIRS[0];
+
+  // Get live price data
+  const priceData = getPrice(currentPair.symbol);
+  const currentPrice = priceData?.price || 0;
+
+  return (
+    <div className="min-h-screen bg-background">
+      <Header />
+
+      <main className="container mx-auto px-4 py-6">
+        <div className="mb-6">
+          <Select value={currentPair.displaySymbol}>
+            <SelectTrigger className="w-[280px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TRADING_PAIRS.map((tradingPair) => (
+                <SelectItem key={tradingPair.displaySymbol} value={tradingPair.displaySymbol}>
+                  <a href={`/trade/${tradingPair.displaySymbol}`} className="block w-full">
+                    <div className="flex items-center justify-between gap-4">
+                      <span>{tradingPair.name}</span>
+                      <span className="text-muted-foreground">{tradingPair.displaySymbol}</span>
+                    </div>
+                  </a>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-6">
+          <div className="lg:col-span-3">
+            <TradePanel asset={currentPair.displaySymbol} currentPrice={currentPrice} />
+          </div>
+          <div className="lg:col-span-9">
+            <TradeChart symbol={currentPair.symbol} />
+          </div>
+        </div>
+
+        <PositionsPanel />
+      </main>
+    </div>
+  );
+};
+
+export default Trade;
