@@ -48,6 +48,12 @@
 
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env};
 
+mod config_manager {
+    soroban_sdk::contractimport!(
+        file = "../../target/wasm32v1-none/release/config_manager.wasm"
+    );
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
@@ -56,6 +62,11 @@ pub enum DataKey {
     TotalShares,
     TotalDeposits,
     Shares(Address),
+    // Liquidity reservation for positions
+    ReservedLiquidity,
+    AuthorizedPositionManager,
+    // Position collateral tracking
+    PositionCollateral(u64),
 }
 
 #[contract]
@@ -133,6 +144,61 @@ fn burn_shares(e: &Env, from: &Address, amount: i128) {
     let total = get_total_shares(e);
     put_shares(e, from, current_shares - amount);
     put_total_shares(e, total - amount);
+}
+
+fn get_reserved_liquidity(e: &Env) -> u128 {
+    e.storage()
+        .instance()
+        .get(&DataKey::ReservedLiquidity)
+        .unwrap_or(0)
+}
+
+fn put_reserved_liquidity(e: &Env, amount: u128) {
+    e.storage()
+        .instance()
+        .set(&DataKey::ReservedLiquidity, &amount);
+}
+
+fn get_authorized_position_manager(e: &Env) -> Option<Address> {
+    e.storage()
+        .instance()
+        .get(&DataKey::AuthorizedPositionManager)
+}
+
+fn put_authorized_position_manager(e: &Env, address: &Address) {
+    e.storage()
+        .instance()
+        .set(&DataKey::AuthorizedPositionManager, address);
+}
+
+fn require_position_manager(e: &Env, caller: &Address) {
+    caller.require_auth();
+    if let Some(authorized) = get_authorized_position_manager(e) {
+        if caller != &authorized {
+            panic!("unauthorized: not position manager");
+        }
+    } else {
+        panic!("position manager not set");
+    }
+}
+
+fn get_position_collateral(e: &Env, position_id: u64) -> u128 {
+    e.storage()
+        .persistent()
+        .get(&DataKey::PositionCollateral(position_id))
+        .unwrap_or(0)
+}
+
+fn put_position_collateral(e: &Env, position_id: u64, amount: u128) {
+    e.storage()
+        .persistent()
+        .set(&DataKey::PositionCollateral(position_id), &amount);
+}
+
+fn delete_position_collateral(e: &Env, position_id: u64) {
+    e.storage()
+        .persistent()
+        .remove(&DataKey::PositionCollateral(position_id));
 }
 
 #[contractimpl]
@@ -247,7 +313,8 @@ impl LiquidityPool {
     ///
     /// # Panics
     ///
-    /// Panics if shares is not positive or if total_shares is zero
+    /// Panics if shares is not positive, if total_shares is zero,
+    /// or if withdrawal would violate liquidity constraints
     pub fn withdraw(env: Env, user: Address, shares: i128) -> i128 {
         // Verify user authorization
         user.require_auth();
@@ -273,6 +340,27 @@ impl LiquidityPool {
         // Calculate tokens to return based on actual pool value
         // tokens = (shares * balance) / total_shares
         let tokens_to_return = (shares * balance) / total_shares;
+
+        // Check available liquidity
+        let reserved = get_reserved_liquidity(&env) as i128;
+        let available = balance - reserved;
+
+        if tokens_to_return > available {
+            panic!("insufficient available liquidity");
+        }
+
+        // Check minimum reserve ratio
+        let config_manager = get_config_manager(&env);
+        let config_client = crate::config_manager::Client::new(&env, &config_manager);
+        let min_reserve_ratio = config_client.min_liquidity_reserve_ratio();
+
+        // After withdrawal, ensure minimum reserve is maintained
+        let balance_after_withdrawal = balance - tokens_to_return;
+        let min_reserve_required = (balance_after_withdrawal * min_reserve_ratio) / 10000;
+
+        if (balance_after_withdrawal - reserved) < min_reserve_required {
+            panic!("withdrawal would violate minimum reserve ratio");
+        }
 
         // Burn shares from user (includes validation)
         burn_shares(&env, &user, shares);
@@ -317,6 +405,209 @@ impl LiquidityPool {
     /// The total deposited token amount
     pub fn get_total_deposits(env: Env) -> i128 {
         get_total_deposits(&env)
+    }
+
+    /// Set the authorized position manager that can reserve/release liquidity.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The admin address (must match ConfigManager admin)
+    /// * `position_manager` - The Position Manager contract address
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not authorized
+    pub fn set_position_manager(env: Env, admin: Address, position_manager: Address) {
+        admin.require_auth();
+
+        // Verify caller is the admin from ConfigManager
+        let config_manager = get_config_manager(&env);
+        let config_client = crate::config_manager::Client::new(&env, &config_manager);
+        let config_admin = config_client.admin();
+
+        if admin != config_admin {
+            panic!("unauthorized: not admin");
+        }
+
+        put_authorized_position_manager(&env, &position_manager);
+    }
+
+    /// Reserve liquidity when a position is opened.
+    ///
+    /// # Arguments
+    ///
+    /// * `position_manager` - The Position Manager contract address
+    /// * `position_id` - The position ID
+    /// * `size` - The position size (notional value) to reserve
+    /// * `collateral` - The collateral amount deposited
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the authorized position manager
+    pub fn reserve_liquidity(
+        env: Env,
+        position_manager: Address,
+        position_id: u64,
+        size: u128,
+        collateral: u128,
+    ) {
+        require_position_manager(&env, &position_manager);
+
+        let reserved = get_reserved_liquidity(&env);
+        let new_reserved = reserved + size;
+
+        put_reserved_liquidity(&env, new_reserved);
+        put_position_collateral(&env, position_id, collateral);
+    }
+
+    /// Release liquidity when a position is closed.
+    ///
+    /// # Arguments
+    ///
+    /// * `position_manager` - The Position Manager contract address
+    /// * `position_id` - The position ID
+    /// * `size` - The position size (notional value) to release
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the authorized position manager
+    pub fn release_liquidity(
+        env: Env,
+        position_manager: Address,
+        position_id: u64,
+        size: u128,
+    ) {
+        require_position_manager(&env, &position_manager);
+
+        let reserved = get_reserved_liquidity(&env);
+        if size > reserved {
+            panic!("cannot release more than reserved");
+        }
+
+        let new_reserved = reserved - size;
+        put_reserved_liquidity(&env, new_reserved);
+        delete_position_collateral(&env, position_id);
+    }
+
+    /// Get the total reserved liquidity.
+    ///
+    /// # Returns
+    ///
+    /// The total liquidity reserved for open positions
+    pub fn get_reserved_liquidity(env: Env) -> u128 {
+        get_reserved_liquidity(&env)
+    }
+
+    /// Get the available liquidity (total balance - reserved).
+    ///
+    /// # Returns
+    ///
+    /// The liquidity available for withdrawal or new positions
+    pub fn get_available_liquidity(env: Env) -> i128 {
+        let balance = get_balance(&env);
+        let reserved = get_reserved_liquidity(&env) as i128;
+        balance - reserved
+    }
+
+    /// Get the pool utilization ratio in basis points.
+    ///
+    /// # Returns
+    ///
+    /// The utilization ratio in basis points (e.g., 8000 = 80%)
+    pub fn get_utilization_ratio(env: Env) -> u32 {
+        let balance = get_balance(&env);
+        if balance == 0 {
+            return 0;
+        }
+
+        let reserved = get_reserved_liquidity(&env) as i128;
+        let utilization = (reserved * 10000) / balance;
+
+        utilization as u32
+    }
+
+    /// Get the collateral deposited for a specific position.
+    ///
+    /// # Arguments
+    ///
+    /// * `position_id` - The position ID
+    ///
+    /// # Returns
+    ///
+    /// The collateral amount for the position
+    pub fn get_position_collateral(env: Env, position_id: u64) -> u128 {
+        get_position_collateral(&env, position_id)
+    }
+
+    /// Deposit collateral for a position.
+    ///
+    /// # Arguments
+    ///
+    /// * `position_manager` - The Position Manager contract address
+    /// * `position_id` - The position ID
+    /// * `trader` - The trader's address
+    /// * `amount` - The collateral amount to deposit
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the authorized position manager
+    pub fn deposit_position_collateral(
+        env: Env,
+        position_manager: Address,
+        position_id: u64,
+        trader: Address,
+        amount: u128,
+    ) {
+        require_position_manager(&env, &position_manager);
+
+        // Transfer collateral from trader to pool
+        let token = get_token(&env);
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&trader, &env.current_contract_address(), &(amount as i128));
+
+        // Track collateral for this position
+        let current = get_position_collateral(&env, position_id);
+        put_position_collateral(&env, position_id, current + amount);
+    }
+
+    /// Withdraw collateral for a position (when closing).
+    ///
+    /// # Arguments
+    ///
+    /// * `position_manager` - The Position Manager contract address
+    /// * `position_id` - The position ID
+    /// * `trader` - The trader's address
+    /// * `amount` - The collateral amount to withdraw
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the authorized position manager
+    pub fn withdraw_position_collateral(
+        env: Env,
+        position_manager: Address,
+        position_id: u64,
+        trader: Address,
+        amount: u128,
+    ) {
+        require_position_manager(&env, &position_manager);
+
+        let current = get_position_collateral(&env, position_id);
+        if amount > current {
+            panic!("insufficient position collateral");
+        }
+
+        // Update or delete collateral tracking
+        let remaining = current - amount;
+        if remaining == 0 {
+            delete_position_collateral(&env, position_id);
+        } else {
+            put_position_collateral(&env, position_id, remaining);
+        }
+
+        // Transfer collateral from pool to trader
+        let token = get_token(&env);
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&env.current_contract_address(), &trader, &(amount as i128));
     }
 }
 

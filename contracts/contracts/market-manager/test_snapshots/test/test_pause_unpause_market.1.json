@@ -1,6 +1,6 @@
 {
   "generators": {
-    "address": 2,
+    "address": 3,
     "nonce": 0,
     "mux_id": 0
   },
@@ -13,17 +13,20 @@
         {
           "function": {
             "contract_fn": {
-              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
-              "function_name": "set_config",
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+              "function_name": "create_market",
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                 },
                 {
-                  "symbol": "CUST_MIN"
+                  "u32": 0
                 },
                 {
-                  "i128": "10"
+                  "u128": "1000000000000"
+                },
+                {
+                  "i128": "10000"
                 }
               ]
             }
@@ -39,17 +42,14 @@
         {
           "function": {
             "contract_fn": {
-              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
-              "function_name": "set_config",
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+              "function_name": "pause_market",
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                 },
                 {
-                  "symbol": "CUST_MAX"
-                },
-                {
-                  "i128": "15"
+                  "u32": 0
                 }
               ]
             }
@@ -59,7 +59,28 @@
       ]
     ],
     [],
-    [],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+              "function_name": "unpause_market",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                },
+                {
+                  "u32": 0
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
     []
   ],
   "ledger": {
@@ -111,6 +132,39 @@
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
             "key": {
               "ledger_key_nonce": {
+                "nonce": "1033654523790656264"
+              }
+            },
+            "durability": "temporary"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+                "key": {
+                  "ledger_key_nonce": {
+                    "nonce": "1033654523790656264"
+                  }
+                },
+                "durability": "temporary",
+                "val": "void"
+              }
+            },
+            "ext": "v0"
+          },
+          6311999
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+            "key": {
+              "ledger_key_nonce": {
                 "nonce": "5541220902715666415"
               }
             },
@@ -141,7 +195,7 @@
       [
         {
           "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
             "key": "ledger_key_contract_instance",
             "durability": "persistent"
           }
@@ -152,7 +206,7 @@
             "data": {
               "contract_data": {
                 "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
                 "key": "ledger_key_contract_instance",
                 "durability": "persistent",
                 "val": {
@@ -177,186 +231,128 @@
                         "key": {
                           "vec": [
                             {
-                              "symbol": "Config"
+                              "symbol": "ConfigManager"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "Market"
                             },
                             {
-                              "symbol": "CUST_MAX"
+                              "u32": 0
                             }
                           ]
                         },
                         "val": {
-                          "i128": "15"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
+                          "map": [
                             {
-                              "symbol": "Config"
+                              "key": {
+                                "symbol": "base_funding_rate"
+                              },
+                              "val": {
+                                "i128": "100"
+                              }
                             },
                             {
-                              "symbol": "CUST_MIN"
+                              "key": {
+                                "symbol": "cumulative_funding_long"
+                              },
+                              "val": {
+                                "i128": "0"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "cumulative_funding_short"
+                              },
+                              "val": {
+                                "i128": "0"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "funding_rate"
+                              },
+                              "val": {
+                                "i128": "0"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "is_paused"
+                              },
+                              "val": {
+                                "bool": false
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "last_funding_update"
+                              },
+                              "val": {
+                                "u64": "0"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "long_open_interest"
+                              },
+                              "val": {
+                                "u128": "0"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "market_id"
+                              },
+                              "val": {
+                                "u32": 0
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "max_funding_rate"
+                              },
+                              "val": {
+                                "i128": "10000"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "max_open_interest"
+                              },
+                              "val": {
+                                "u128": "1000000000000"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "short_open_interest"
+                              },
+                              "val": {
+                                "u128": "0"
+                              }
                             }
                           ]
-                        },
-                        "val": {
-                          "i128": "10"
                         }
                       },
                       {
                         "key": {
                           "vec": [
                             {
-                              "symbol": "FundingInterval"
+                              "symbol": "MarketCount"
                             }
                           ]
                         },
                         "val": {
-                          "u64": "60"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "LiquidationFeeBps"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "i128": "50"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "LiquidationThreshold"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "i128": "9000"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "MaintenanceMargin"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "i128": "5000"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "MakerFeeBps"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "i128": "2"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "MaxLeverage"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "i128": "20"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "MaxPriceDeviationBps"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "i128": "500"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "MaxUtilizationRatio"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "i128": "8000"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "MinLeverage"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "i128": "5"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "MinLiquidityReserveRatio"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "i128": "2000"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "MinPositionSize"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "i128": "10000000"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "PriceStalenessThreshold"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "u64": "60"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "TakerFeeBps"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "i128": "5"
+                          "u32": 1
                         }
                       }
                     ]

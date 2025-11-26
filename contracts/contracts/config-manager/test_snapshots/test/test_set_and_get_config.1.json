@@ -274,12 +274,36 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "MaxUtilizationRatio"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "i128": "8000"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "MinLeverage"
                             }
                           ]
                         },
                         "val": {
                           "i128": "5"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "MinLiquidityReserveRatio"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "i128": "2000"
                         }
                       },
                       {

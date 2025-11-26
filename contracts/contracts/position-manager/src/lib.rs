@@ -73,7 +73,7 @@
 //! - Conditional orders (OCO, trailing stops)
 //! - Position delegation and social trading
 
-use soroban_sdk::{contract, contractevent, contractimpl, contracttype, token, Address, Env};
+use soroban_sdk::{contract, contractevent, contractimpl, contracttype, Address, Env};
 
 mod config_manager {
     soroban_sdk::contractimport!(
@@ -87,6 +87,18 @@ mod oracle_integrator {
     );
 }
 
+mod liquidity_pool {
+    soroban_sdk::contractimport!(
+        file = "../../target/wasm32v1-none/release/liquidity_pool.wasm"
+    );
+}
+
+mod market_manager {
+    soroban_sdk::contractimport!(
+        file = "../../target/wasm32v1-none/release/market_manager.wasm"
+    );
+}
+
 #[contract]
 pub struct PositionManager;
 
@@ -94,10 +106,15 @@ pub struct PositionManager;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Position {
     pub trader: Address,
+    pub market_id: u32,                 // NEW: which market (0=XLM, 1=BTC, 2=ETH)
     pub collateral: u128,
     pub size: u128,
     pub is_long: bool,
-    pub entry_price: u128,
+    pub entry_price: i128,              // Changed to i128
+    pub entry_funding_long: i128,       // NEW: cumulative funding snapshot (long side)
+    pub entry_funding_short: i128,      // NEW: cumulative funding snapshot (short side)
+    pub last_interaction: u64,          // NEW: timestamp for borrowing fee calculation
+    pub liquidation_price: i128,        // NEW: price at which position is liquidatable
 }
 
 // Events
@@ -118,6 +135,24 @@ pub struct PositionClosedEvent {
     pub position_id: u64,
     pub trader: Address,
     pub pnl: i128,
+}
+
+#[contractevent]
+pub struct PositionModifiedEvent {
+    pub position_id: u64,
+    pub trader: Address,
+    pub new_collateral: u128,
+    pub new_size: u128,
+    pub new_liquidation_price: i128,
+}
+
+#[contractevent]
+pub struct PositionLiquidatedEvent {
+    pub position_id: u64,
+    pub trader: Address,
+    pub liquidator: Address,
+    pub liquidation_price: i128,
+    pub liquidation_reward: u128,
 }
 
 #[derive(Clone)]
@@ -151,6 +186,20 @@ fn get_oracle(env: &Env) -> Address {
     let config_manager = get_config_manager(env);
     let config_client = config_manager::Client::new(env, &config_manager);
     config_client.oracle_integrator()
+}
+
+/// Get the LiquidityPool address from ConfigManager
+fn get_liquidity_pool(env: &Env) -> Address {
+    let config_manager = get_config_manager(env);
+    let config_client = config_manager::Client::new(env, &config_manager);
+    config_client.liquidity_pool()
+}
+
+/// Get the MarketManager address from ConfigManager
+fn get_market_manager(env: &Env) -> Address {
+    let config_manager = get_config_manager(env);
+    let config_client = config_manager::Client::new(env, &config_manager);
+    config_client.market_manager()
 }
 
 /// Get a position from storage
@@ -254,6 +303,117 @@ fn validate_position_size(env: &Env, size: u128) {
     }
 }
 
+/// Calculate liquidation price for a position
+///
+/// # Formula
+/// - For longs: liquidation_price = entry_price * (1 - (collateral / size) + maintenance_margin)
+/// - For shorts: liquidation_price = entry_price * (1 + (collateral / size) - maintenance_margin)
+///
+/// Where maintenance_margin = 0.01 (1%)
+///
+/// # Arguments
+/// * `entry_price` - Entry price of the position (scaled by 1e7)
+/// * `collateral` - Collateral amount (scaled by 1e7)
+/// * `size` - Position size (scaled by 1e7)
+/// * `is_long` - True for long positions, false for short positions
+///
+/// # Returns
+/// Liquidation price (scaled by 1e7)
+fn calculate_liquidation_price(entry_price: i128, collateral: u128, size: u128, is_long: bool) -> i128 {
+    // Maintenance margin = 1% = 100 bps
+    const MAINTENANCE_MARGIN_BPS: i128 = 100;
+    const BPS_DIVISOR: i128 = 10000;
+
+    let collateral_i128 = collateral as i128;
+    let size_i128 = size as i128;
+
+    if size_i128 == 0 {
+        panic!("Cannot calculate liquidation price for zero size");
+    }
+
+    // Calculate collateral ratio in basis points: (collateral / size) * 10000
+    let collateral_ratio_bps = (collateral_i128 * BPS_DIVISOR) / size_i128;
+
+    if is_long {
+        // For longs: liquidation_price = entry_price * (1 - collateral_ratio + maintenance_margin)
+        // = entry_price * (10000 - collateral_ratio_bps + maintenance_margin_bps) / 10000
+        let multiplier_bps = BPS_DIVISOR - collateral_ratio_bps + MAINTENANCE_MARGIN_BPS;
+        (entry_price * multiplier_bps) / BPS_DIVISOR
+    } else {
+        // For shorts: liquidation_price = entry_price * (1 + collateral_ratio - maintenance_margin)
+        // = entry_price * (10000 + collateral_ratio_bps - maintenance_margin_bps) / 10000
+        let multiplier_bps = BPS_DIVISOR + collateral_ratio_bps - MAINTENANCE_MARGIN_BPS;
+        (entry_price * multiplier_bps) / BPS_DIVISOR
+    }
+}
+
+/// Calculate comprehensive PnL for a position
+///
+/// # PnL Components
+/// 1. **Price PnL**: Profit/loss from price movement
+///    - Long: (current_price - entry_price) * size / 1e7
+///    - Short: (entry_price - current_price) * size / 1e7
+///
+/// 2. **Funding Payments**: Accumulated funding rate payments
+///    - Long pays funding when rate is positive (long > short OI)
+///    - Short pays funding when rate is negative (short > long OI)
+///    - Payment = (cumulative_now - cumulative_entry) * size / 1e7
+///
+/// 3. **Borrowing Fees**: Time-based fees for leverage
+///    - Fee = borrow_rate_per_second * time_elapsed * size / 1e7
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `position` - Position struct containing all position data
+/// * `current_price` - Current market price (scaled by 1e7)
+///
+/// # Returns
+/// Net PnL (can be negative) scaled by 1e7
+fn calculate_pnl(env: &Env, position: &Position, current_price: i128) -> i128 {
+    let size_i128 = position.size as i128;
+
+    // 1. Calculate Price PnL
+    let price_diff = if position.is_long {
+        current_price - position.entry_price
+    } else {
+        position.entry_price - current_price
+    };
+    let price_pnl = (price_diff * size_i128) / 10_000_000; // Divide by 1e7 for scaling
+
+    // 2. Calculate Funding Payments
+    let market_manager = get_market_manager(env);
+    let market_client = market_manager::Client::new(env, &market_manager);
+
+    let cumulative_funding_long = market_client.get_cumulative_funding(&position.market_id, &true);
+    let cumulative_funding_short = market_client.get_cumulative_funding(&position.market_id, &false);
+
+    let funding_payment = if position.is_long {
+        // Longs pay based on long-side cumulative funding
+        let funding_accrued = cumulative_funding_long - position.entry_funding_long;
+        (funding_accrued * size_i128) / 10_000_000 // Divide by 1e7
+    } else {
+        // Shorts pay based on short-side cumulative funding
+        let funding_accrued = cumulative_funding_short - position.entry_funding_short;
+        (funding_accrued * size_i128) / 10_000_000 // Divide by 1e7
+    };
+
+    // 3. Calculate Borrowing Fees
+    // TODO: Uncomment when ConfigManager adds borrow_rate_per_second()
+    // let config_manager = get_config_manager(env);
+    // let config_client = config_manager::Client::new(env, &config_manager);
+    // let borrow_rate_per_second = config_client.borrow_rate_per_second() as i128;
+    // let current_timestamp = env.ledger().timestamp();
+    // let time_elapsed = (current_timestamp - position.last_interaction) as i128;
+    // let borrowing_fee = (borrow_rate_per_second * time_elapsed * size_i128) / 10_000_000;
+
+    // For now, borrowing fees are 0 (not yet implemented in ConfigManager)
+    let borrowing_fee = 0;
+
+    // Net PnL = Price PnL - Funding Payments - Borrowing Fees
+    // (funding_payment and borrowing_fee are costs, so subtract)
+    price_pnl - funding_payment - borrowing_fee
+}
+
 #[contractimpl]
 impl PositionManager {
     /// Initialize the PositionManager contract.
@@ -322,30 +482,84 @@ impl PositionManager {
         // Validate position size against ConfigManager minimum
         validate_position_size(&env, size);
 
-        // Get the token contract and transfer collateral from trader to this contract
-        let token_address = get_token(&env);
-        let token_client = token::Client::new(&env, &token_address);
-        token_client.transfer(
-            &trader,
-            &env.current_contract_address(),
-            &(collateral as i128),
-        );
-
         // Get entry price from OracleIntegrator
         let oracle_address = get_oracle(&env);
         let oracle_client = oracle_integrator::Client::new(&env, &oracle_address);
-        let entry_price = oracle_client.get_price(&market_id) as u128;
+        let entry_price = oracle_client.get_price(&market_id);
+
+        // Check market is not paused and can accept this position
+        let market_manager = get_market_manager(&env);
+        let market_client = market_manager::Client::new(&env, &market_manager);
+
+        if !market_client.can_open_position(&market_id, &is_long, &size) {
+            panic!("Cannot open position - market paused or OI limit reached");
+        }
+
+        // Get current cumulative funding rates for this position
+        let entry_funding_long = market_client.get_cumulative_funding(&market_id, &true);
+        let entry_funding_short = market_client.get_cumulative_funding(&market_id, &false);
 
         // Generate a new position ID
         let position_id = increment_position_id(&env);
 
-        // Create the position
+        // Get liquidity pool and check utilization
+        let pool_address = get_liquidity_pool(&env);
+        let pool_client = liquidity_pool::Client::new(&env, &pool_address);
+
+        // Check max utilization before opening position
+        let config_manager = get_config_manager(&env);
+        let config_client = config_manager::Client::new(&env, &config_manager);
+        let max_utilization = config_client.max_utilization_ratio();
+
+        // Calculate what utilization would be after this position
+        let reserved_current = pool_client.get_reserved_liquidity();
+        let available = pool_client.get_available_liquidity();
+
+        if available <= 0 {
+            panic!("no available liquidity");
+        }
+
+        let total_balance = available as u128 + reserved_current;
+        let reserved_after = reserved_current + size;
+
+        if total_balance > 0 {
+            let utilization_after = ((reserved_after * 10000) / total_balance) as i128;
+            if utilization_after > max_utilization {
+                panic!("position would exceed max utilization");
+            }
+        }
+
+        // Deposit collateral to liquidity pool
+        pool_client.deposit_position_collateral(
+            &env.current_contract_address(),
+            &position_id,
+            &trader,
+            &collateral,
+        );
+
+        // Reserve liquidity for this position
+        pool_client.reserve_liquidity(
+            &env.current_contract_address(),
+            &position_id,
+            &size,
+            &collateral,
+        );
+
+        // Calculate liquidation price
+        let liquidation_price = calculate_liquidation_price(entry_price, collateral, size, is_long);
+
+        // Create the position with all new fields
         let position = Position {
             trader: trader.clone(),
+            market_id,
             collateral,
             size,
             is_long,
             entry_price,
+            entry_funding_long,
+            entry_funding_short,
+            last_interaction: env.ledger().timestamp(),
+            liquidation_price,
         };
 
         // Store the position
@@ -353,6 +567,10 @@ impl PositionManager {
 
         // Add position ID to user's list of open positions
         add_user_position(&env, &trader, position_id);
+
+        // Update open interest in MarketManager
+        let size_i128 = size as i128;
+        market_client.update_open_interest(&env.current_contract_address(), &market_id, &is_long, &size_i128);
 
         // Emit position opened event
         PositionOpenedEvent {
@@ -363,7 +581,7 @@ impl PositionManager {
             size,
             leverage,
             is_long,
-            entry_price,
+            entry_price: entry_price as u128, // Convert i128 to u128 for event
         }
         .publish(&env);
 
@@ -382,12 +600,13 @@ impl PositionManager {
     ///
     /// The realized PnL (positive for profit, negative for loss)
     ///
-    /// # MVP Implementation
+    /// # Implementation
     ///
-    /// For MVP:
-    /// - Returns collateral back to trader (no PnL since price doesn't change)
-    /// - PnL is always 0
-    /// - No fees applied
+    /// - Gets current price from OracleIntegrator
+    /// - Calculates comprehensive PnL (price PnL + funding payments + borrowing fees)
+    /// - Settles PnL with LiquidityPool
+    /// - Updates MarketManager open interest
+    /// - Returns collateral ± PnL to trader
     /// - Emits PositionClosed event
     pub fn close_position(env: Env, trader: Address, position_id: u64) -> i128 {
         // Require trader authorization
@@ -401,15 +620,60 @@ impl PositionManager {
             panic!("Unauthorized: caller does not own this position");
         }
 
-        // Get the token contract
-        let token_address = get_token(&env);
-        let token_client = token::Client::new(&env, &token_address);
+        // Get current price from OracleIntegrator
+        let oracle_address = get_oracle(&env);
+        let oracle_client = oracle_integrator::Client::new(&env, &oracle_address);
+        let current_price = oracle_client.get_price(&position.market_id);
 
-        // Transfer collateral back to trader (convert u128 to i128)
-        token_client.transfer(
+        // Calculate comprehensive PnL
+        let pnl = calculate_pnl(&env, &position, current_price);
+
+        // Get liquidity pool
+        let pool_address = get_liquidity_pool(&env);
+        let pool_client = liquidity_pool::Client::new(&env, &pool_address);
+
+        // Release reserved liquidity
+        pool_client.release_liquidity(
             &env.current_contract_address(),
-            &trader,
-            &(position.collateral as i128),
+            &position_id,
+            &position.size,
+        );
+
+        // Settle PnL with pool and withdraw collateral to trader
+        // If PnL is positive, trader gets collateral + profit
+        // If PnL is negative, trader gets collateral - loss
+        let collateral_i128 = position.collateral as i128;
+        let final_amount = collateral_i128 + pnl;
+
+        if final_amount < 0 {
+            // Position is completely underwater - trader gets nothing
+            // Pool keeps the collateral to cover losses
+            pool_client.withdraw_position_collateral(
+                &env.current_contract_address(),
+                &position_id,
+                &pool_address, // Send to pool, not trader
+                &position.collateral,
+            );
+        } else {
+            // Trader gets final amount (collateral ± PnL)
+            let withdrawal_amount = final_amount as u128;
+            pool_client.withdraw_position_collateral(
+                &env.current_contract_address(),
+                &position_id,
+                &trader,
+                &withdrawal_amount,
+            );
+        }
+
+        // Update open interest in MarketManager (decrease)
+        let market_manager = get_market_manager(&env);
+        let market_client = market_manager::Client::new(&env, &market_manager);
+        let size_decrease = -(position.size as i128); // Negative to decrease
+        market_client.update_open_interest(
+            &env.current_contract_address(),
+            &position.market_id,
+            &position.is_long,
+            &size_decrease,
         );
 
         // Delete the position from storage
@@ -417,9 +681,6 @@ impl PositionManager {
 
         // Remove position ID from user's list of open positions
         remove_user_position(&env, &trader, position_id);
-
-        // MVP: PnL is always 0 (no price changes)
-        let pnl: i128 = 0;
 
         // Emit position closed event
         PositionClosedEvent {
@@ -430,11 +691,6 @@ impl PositionManager {
         .publish(&env);
 
         // Return PnL
-        // In production, would:
-        // - Get current price from OracleIntegrator
-        // - Calculate PnL: (exit_price - entry_price) * size * direction
-        // - Apply funding payments
-        // - Settle with LiquidityPool
         pnl
     }
 
@@ -446,21 +702,139 @@ impl PositionManager {
     /// * `position_id` - The unique position identifier
     /// * `additional_collateral` - Additional collateral to add (0 if none)
     /// * `additional_size` - Additional position size (0 if none)
+    ///
+    /// # Implementation
+    ///
+    /// - Verifies trader owns the position
+    /// - Checks leverage limits with new total size
+    /// - Checks market open interest limits for additional size
+    /// - Transfers additional collateral if provided
+    /// - Updates position size and recalculates average entry price
+    /// - Recalculates liquidation price
+    /// - Updates funding rate snapshots and last_interaction timestamp
+    /// - Updates MarketManager open interest
+    /// - Emits PositionModified event
     pub fn increase_position(
-        _env: Env,
-        _trader: Address,
-        _position_id: u64,
-        _additional_collateral: i128,
-        _additional_size: i128,
+        env: Env,
+        trader: Address,
+        position_id: u64,
+        additional_collateral: u128,
+        additional_size: u128,
     ) {
-        // TODO: Implement position increase logic
-        // - Verify trader owns the position
-        // - Check leverage limits with additional size
-        // - Check market open interest limits
-        // - Transfer additional collateral if any
-        // - Update position size and average entry price
-        // - Update liquidation price
-        // - Emit position modified event
+        // Require trader authorization
+        trader.require_auth();
+
+        // At least one of collateral or size must be added
+        if additional_collateral == 0 && additional_size == 0 {
+            panic!("Must add collateral or size");
+        }
+
+        // Retrieve the position
+        let mut position = get_position(&env, position_id);
+
+        // Verify the trader owns the position
+        if position.trader != trader {
+            panic!("Unauthorized: caller does not own this position");
+        }
+
+        // Get current price for entry price calculation if adding size
+        let current_price = if additional_size > 0 {
+            let oracle_address = get_oracle(&env);
+            let oracle_client = oracle_integrator::Client::new(&env, &oracle_address);
+            oracle_client.get_price(&position.market_id)
+        } else {
+            position.entry_price
+        };
+
+        // Update collateral if provided
+        if additional_collateral > 0 {
+            let pool_address = get_liquidity_pool(&env);
+            let pool_client = liquidity_pool::Client::new(&env, &pool_address);
+
+            // Transfer additional collateral from trader to pool
+            pool_client.deposit_position_collateral(
+                &env.current_contract_address(),
+                &position_id,
+                &trader,
+                &additional_collateral,
+            );
+
+            position.collateral = position.collateral
+                .checked_add(additional_collateral)
+                .expect("Collateral overflow");
+        }
+
+        // Update size if provided
+        if additional_size > 0 {
+            // Check market can accept additional size
+            let market_manager = get_market_manager(&env);
+            let market_client = market_manager::Client::new(&env, &market_manager);
+
+            if !market_client.can_open_position(&position.market_id, &position.is_long, &additional_size) {
+                panic!("Cannot increase position - market paused or OI limit reached");
+            }
+
+            // Calculate new average entry price
+            let old_size_value = position.size as i128 * position.entry_price;
+            let new_size_value = additional_size as i128 * current_price;
+            let total_size = position.size + additional_size;
+            let avg_entry_price = (old_size_value + new_size_value) / (total_size as i128);
+
+            // Reserve additional liquidity
+            let pool_address = get_liquidity_pool(&env);
+            let pool_client = liquidity_pool::Client::new(&env, &pool_address);
+            pool_client.reserve_liquidity(
+                &env.current_contract_address(),
+                &position_id,
+                &additional_size,
+                &0, // No new collateral reserved (already handled above)
+            );
+
+            // Update position fields
+            position.size = total_size;
+            position.entry_price = avg_entry_price;
+
+            // Update open interest in MarketManager
+            let size_i128 = additional_size as i128;
+            market_client.update_open_interest(
+                &env.current_contract_address(),
+                &position.market_id,
+                &position.is_long,
+                &size_i128,
+            );
+
+            // Update funding snapshots to current values
+            position.entry_funding_long = market_client.get_cumulative_funding(&position.market_id, &true);
+            position.entry_funding_short = market_client.get_cumulative_funding(&position.market_id, &false);
+        }
+
+        // Check leverage is still within limits
+        let effective_leverage = position.size / position.collateral;
+        validate_leverage(&env, effective_leverage as u32);
+
+        // Recalculate liquidation price
+        position.liquidation_price = calculate_liquidation_price(
+            position.entry_price,
+            position.collateral,
+            position.size,
+            position.is_long,
+        );
+
+        // Update last interaction timestamp
+        position.last_interaction = env.ledger().timestamp();
+
+        // Store updated position
+        set_position(&env, position_id, &position);
+
+        // Emit position modified event
+        PositionModifiedEvent {
+            position_id,
+            trader: trader.clone(),
+            new_collateral: position.collateral,
+            new_size: position.size,
+            new_liquidation_price: position.liquidation_price,
+        }
+        .publish(&env);
     }
 
     /// Decrease position size or remove collateral.
@@ -471,20 +845,154 @@ impl PositionManager {
     /// * `position_id` - The unique position identifier
     /// * `collateral_to_remove` - Collateral to remove (0 if none)
     /// * `size_to_reduce` - Position size to reduce (0 if none)
+    ///
+    /// # Implementation
+    ///
+    /// - Verifies trader owns the position
+    /// - If reducing size, realizes proportional PnL
+    /// - Releases corresponding reserved liquidity
+    /// - Updates MarketManager open interest
+    /// - If removing collateral, verifies position remains sufficiently collateralized
+    /// - Transfers collateral to trader if removed
+    /// - Recalculates liquidation price
+    /// - Updates last_interaction timestamp
+    /// - Emits PositionModified event
     pub fn decrease_position(
-        _env: Env,
-        _trader: Address,
-        _position_id: u64,
-        _collateral_to_remove: i128,
-        _size_to_reduce: i128,
+        env: Env,
+        trader: Address,
+        position_id: u64,
+        collateral_to_remove: u128,
+        size_to_reduce: u128,
     ) {
-        // TODO: Implement position decrease logic
-        // - Verify trader owns the position
-        // - Verify position remains above minimum margin ratio
-        // - Realize partial PnL for size reduction
-        // - Transfer collateral to trader if removed
-        // - Update position size and liquidation price
-        // - Emit position modified event
+        // Require trader authorization
+        trader.require_auth();
+
+        // At least one of collateral or size must be removed
+        if collateral_to_remove == 0 && size_to_reduce == 0 {
+            panic!("Must remove collateral or size");
+        }
+
+        // Retrieve the position
+        let mut position = get_position(&env, position_id);
+
+        // Verify the trader owns the position
+        if position.trader != trader {
+            panic!("Unauthorized: caller does not own this position");
+        }
+
+        // Verify we're not removing more than exists
+        if collateral_to_remove > position.collateral {
+            panic!("Cannot remove more collateral than exists");
+        }
+        if size_to_reduce > position.size {
+            panic!("Cannot reduce more size than exists");
+        }
+
+        let pool_address = get_liquidity_pool(&env);
+        let pool_client = liquidity_pool::Client::new(&env, &pool_address);
+
+        // Handle size reduction with PnL realization
+        if size_to_reduce > 0 {
+            // Get current price
+            let oracle_address = get_oracle(&env);
+            let oracle_client = oracle_integrator::Client::new(&env, &oracle_address);
+            let current_price = oracle_client.get_price(&position.market_id);
+
+            // Calculate proportional PnL for the size being closed
+            let total_pnl = calculate_pnl(&env, &position, current_price);
+            let proportion = (size_to_reduce as i128 * 10000) / (position.size as i128);
+            let realized_pnl = (total_pnl * proportion) / 10000;
+
+            // Realize PnL: adjust collateral by realized PnL
+            let collateral_i128 = position.collateral as i128;
+            let new_collateral_i128 = collateral_i128 + realized_pnl;
+
+            if new_collateral_i128 <= 0 {
+                panic!("Position underwater - use close or liquidate instead");
+            }
+
+            position.collateral = new_collateral_i128 as u128;
+
+            // Release reserved liquidity
+            pool_client.release_liquidity(
+                &env.current_contract_address(),
+                &position_id,
+                &size_to_reduce,
+            );
+
+            // Update MarketManager open interest (decrease)
+            let market_manager = get_market_manager(&env);
+            let market_client = market_manager::Client::new(&env, &market_manager);
+            let size_decrease = -(size_to_reduce as i128);
+            market_client.update_open_interest(
+                &env.current_contract_address(),
+                &position.market_id,
+                &position.is_long,
+                &size_decrease,
+            );
+
+            // Update position size
+            position.size = position.size - size_to_reduce;
+
+            // Update funding snapshots to current values
+            position.entry_funding_long = market_client.get_cumulative_funding(&position.market_id, &true);
+            position.entry_funding_short = market_client.get_cumulative_funding(&position.market_id, &false);
+
+            // Verify remaining position meets minimum size
+            validate_position_size(&env, position.size);
+        }
+
+        // Handle collateral removal
+        if collateral_to_remove > 0 {
+            // Verify this won't make position undercollateralized
+            let remaining_collateral = position.collateral - collateral_to_remove;
+            let effective_leverage = position.size / remaining_collateral;
+
+            // Check leverage is still within limits
+            validate_leverage(&env, effective_leverage as u32);
+
+            // Check maintenance margin (1% = 100x max effective leverage)
+            let margin_ratio = (remaining_collateral * 10000) / position.size;
+            if margin_ratio < 100 {
+                // Less than 1% margin
+                panic!("Cannot remove collateral - would violate maintenance margin");
+            }
+
+            // Update collateral
+            position.collateral = remaining_collateral;
+
+            // Withdraw collateral from pool to trader
+            pool_client.withdraw_position_collateral(
+                &env.current_contract_address(),
+                &position_id,
+                &trader,
+                &collateral_to_remove,
+            );
+        }
+
+        // Recalculate liquidation price
+        position.liquidation_price = calculate_liquidation_price(
+            position.entry_price,
+            position.collateral,
+            position.size,
+            position.is_long,
+        );
+
+        // Update last interaction timestamp
+        position.last_interaction = env.ledger().timestamp();
+
+        // Store updated position
+        set_position(&env, position_id, &position);
+
+        // Emit position modified event
+        PositionModifiedEvent {
+            position_id,
+            trader: trader.clone(),
+            new_collateral: position.collateral,
+            new_size: position.size,
+            new_liquidation_price: position.liquidation_price,
+        }
+        .publish(&env);
     }
 
     /// Liquidate an undercollateralized position.
@@ -497,20 +1005,147 @@ impl PositionManager {
     /// # Returns
     ///
     /// The liquidation reward paid to the keeper
-    pub fn liquidate_position(_env: Env, _keeper: Address, _position_id: u64) -> i128 {
-        // TODO: Implement liquidation logic
-        // - Get current price from OracleIntegrator
-        // - Calculate current margin ratio
-        // - Verify position is liquidatable (margin < threshold)
-        // - Calculate liquidation fee for keeper
-        // - Close position at current price
-        // - Settle losses with LiquidityPool
-        // - Pay liquidation reward to keeper
-        // - Update market open interest in MarketManager
-        // - Delete position from storage
-        // - Remove position ID from user's list: remove_user_position(&env, &position.trader, position_id)
-        // - Emit position liquidated event
-        0
+    ///
+    /// # Implementation
+    ///
+    /// - Gets current price from OracleIntegrator
+    /// - Calculates comprehensive PnL including all fees
+    /// - Verifies position is liquidatable (underwater or below maintenance margin)
+    /// - Calculates liquidation fees:
+    ///   - 0.3% of position size goes to keeper as reward
+    ///   - 0.2% of position size goes to liquidity pool
+    /// - Settles with LiquidityPool (collateral minus losses and fees)
+    /// - Updates MarketManager open interest
+    /// - Deletes position from storage
+    /// - Emits PositionLiquidated event
+    pub fn liquidate_position(env: Env, keeper: Address, position_id: u64) -> u128 {
+        // Keeper must authorize (they're paying gas)
+        keeper.require_auth();
+
+        // Retrieve the position
+        let position = get_position(&env, position_id);
+
+        // Get current price from OracleIntegrator
+        let oracle_address = get_oracle(&env);
+        let oracle_client = oracle_integrator::Client::new(&env, &oracle_address);
+        let current_price = oracle_client.get_price(&position.market_id);
+
+        // Calculate comprehensive PnL
+        let pnl = calculate_pnl(&env, &position, current_price);
+
+        // Calculate remaining collateral value after PnL
+        let collateral_i128 = position.collateral as i128;
+        let remaining_value = collateral_i128 + pnl;
+
+        // Calculate maintenance margin requirement (1% of position size)
+        let maintenance_margin = (position.size as i128 * 100) / 10000; // 1% in basis points
+
+        // Verify position is liquidatable
+        // Position is liquidatable if:
+        // 1. Remaining value <= 0 (completely underwater), OR
+        // 2. Remaining value < maintenance_margin (below 1% maintenance)
+        if remaining_value > maintenance_margin {
+            panic!("Position not liquidatable - sufficient collateral");
+        }
+
+        // Get ConfigManager for liquidation fee parameters
+        let config_manager = get_config_manager(&env);
+        let config_client = config_manager::Client::new(&env, &config_manager);
+        let liquidation_fee = config_client.liquidation_fee_bps(); // In basis points (e.g., 50 = 0.5%)
+
+        // Calculate liquidation fees
+        // Total liquidation fee is split: 60% to keeper, 40% to pool
+        let total_liquidation_fee = (position.size as i128 * liquidation_fee as i128) / 10000;
+        let keeper_reward = (total_liquidation_fee * 60) / 100; // 60% of fee
+        let pool_fee = (total_liquidation_fee * 40) / 100; // 40% of fee
+
+        // Get liquidity pool
+        let pool_address = get_liquidity_pool(&env);
+        let pool_client = liquidity_pool::Client::new(&env, &pool_address);
+
+        // Release reserved liquidity
+        pool_client.release_liquidity(
+            &env.current_contract_address(),
+            &position_id,
+            &position.size,
+        );
+
+        // Settle liquidation:
+        // - If position has remaining collateral value, use it to pay fees
+        // - Keeper gets their reward from position collateral
+        // - Pool gets their fee from position collateral
+        // - Any remaining collateral (or deficit) goes to/from pool
+
+        let mut keeper_payment = 0u128;
+
+        if remaining_value > 0 {
+            // Position has some remaining value
+            let available = remaining_value as u128;
+
+            // Pay keeper first (up to their reward amount)
+            if keeper_reward > 0 {
+                keeper_payment = keeper_reward.min(available as i128) as u128;
+                if keeper_payment > 0 {
+                    pool_client.withdraw_position_collateral(
+                        &env.current_contract_address(),
+                        &position_id,
+                        &keeper,
+                        &keeper_payment,
+                    );
+                }
+            }
+
+            // Remaining collateral stays with pool (covers losses and pool fee)
+            let remaining_collateral = position.collateral - keeper_payment;
+            if remaining_collateral > 0 {
+                pool_client.withdraw_position_collateral(
+                    &env.current_contract_address(),
+                    &position_id,
+                    &pool_address,
+                    &remaining_collateral,
+                );
+            }
+        } else {
+            // Position completely underwater - all collateral goes to pool to cover losses
+            pool_client.withdraw_position_collateral(
+                &env.current_contract_address(),
+                &position_id,
+                &pool_address,
+                &position.collateral,
+            );
+            // Keeper gets no reward in this case (position too underwater)
+            keeper_payment = 0;
+        }
+
+        // Update open interest in MarketManager (decrease)
+        let market_manager = get_market_manager(&env);
+        let market_client = market_manager::Client::new(&env, &market_manager);
+        let size_decrease = -(position.size as i128);
+        market_client.update_open_interest(
+            &env.current_contract_address(),
+            &position.market_id,
+            &position.is_long,
+            &size_decrease,
+        );
+
+        // Delete the position from storage
+        remove_position(&env, position_id);
+
+        // Remove position ID from user's list of open positions
+        remove_user_position(&env, &position.trader, position_id);
+
+        // Emit position liquidated event
+        PositionLiquidatedEvent {
+            position_id,
+            trader: position.trader.clone(),
+            liquidator: keeper.clone(),
+            liquidation_price: current_price,
+            liquidation_reward: keeper_payment,
+        }
+        .publish(&env);
+
+        // Return keeper reward
+        keeper_payment
     }
 
     /// Get position details.

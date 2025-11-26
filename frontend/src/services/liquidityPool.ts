@@ -176,3 +176,46 @@ export function calculateUserShareValue(
   if (totalShares === BigInt(0)) return BigInt(0);
   return (userShares * totalDeposits) / totalShares;
 }
+
+/**
+ * Get reserved liquidity (locked in open positions)
+ * @returns Reserved liquidity as bigint (u128)
+ */
+export async function getReservedLiquidity(): Promise<bigint> {
+  const client = getLiquidityPoolClient();
+  const tx = await client.get_reserved_liquidity();
+  const result = await tx.simulate();
+  return result.result;
+}
+
+/**
+ * Get available liquidity (can be withdrawn by LPs)
+ * @returns Available liquidity as bigint (i128)
+ */
+export async function getAvailableLiquidity(): Promise<bigint> {
+  const client = getLiquidityPoolClient();
+  const tx = await client.get_available_liquidity();
+  const result = await tx.simulate();
+  return result.result;
+}
+
+/**
+ * Get pool utilization ratio in basis points
+ * @returns Utilization ratio (e.g., 8000 = 80%)
+ */
+export async function getUtilizationRatio(): Promise<number> {
+  const client = getLiquidityPoolClient();
+  const tx = await client.get_utilization_ratio();
+  const result = await tx.simulate();
+  return Number(result.result);
+}
+
+/**
+ * Format utilization ratio as percentage
+ * @param utilizationBps - Utilization in basis points
+ * @returns Formatted percentage string
+ */
+export function formatUtilization(utilizationBps: number): string {
+  const percentage = utilizationBps / 100;
+  return `${percentage.toFixed(2)}%`;
+}

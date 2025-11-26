@@ -159,6 +159,9 @@ pub enum DataKey {
     // Time parameters
     FundingInterval,
     PriceStalenessThreshold,
+    // Liquidity parameters
+    MaxUtilizationRatio,
+    MinLiquidityReserveRatio,
     // Generic config key for dynamic parameters
     Config(Symbol),
 }
@@ -246,6 +249,10 @@ impl ConfigManager {
         // Time parameters
         put_time_config_value(&env, &DataKey::FundingInterval, 60);
         put_time_config_value(&env, &DataKey::PriceStalenessThreshold, 60);
+
+        // Liquidity parameters (in basis points)
+        put_config_value(&env, &DataKey::MaxUtilizationRatio, 8000); // 80%
+        put_config_value(&env, &DataKey::MinLiquidityReserveRatio, 2000); // 20%
     }
 
     /// Set a configuration parameter using a Symbol key.
@@ -545,6 +552,60 @@ impl ConfigManager {
     /// The Token contract address
     pub fn token(env: Env) -> Address {
         get_contract_address(&env, &DataKey::TokenContract)
+    }
+
+    /// Get maximum pool utilization ratio in basis points.
+    ///
+    /// # Returns
+    ///
+    /// Maximum utilization ratio in basis points (default: 8000 = 80%)
+    pub fn max_utilization_ratio(env: Env) -> i128 {
+        get_config_value(&env, &DataKey::MaxUtilizationRatio)
+    }
+
+    /// Set maximum pool utilization ratio in basis points.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `ratio` - The maximum utilization ratio in basis points (e.g., 8000 = 80%)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or ratio is invalid
+    pub fn set_max_utilization_ratio(env: Env, admin: Address, ratio: i128) {
+        require_admin(&env, &admin);
+        if ratio < 0 || ratio > 10000 {
+            panic!("invalid utilization ratio");
+        }
+        put_config_value(&env, &DataKey::MaxUtilizationRatio, ratio);
+    }
+
+    /// Get minimum liquidity reserve ratio in basis points.
+    ///
+    /// # Returns
+    ///
+    /// Minimum reserve ratio in basis points (default: 2000 = 20%)
+    pub fn min_liquidity_reserve_ratio(env: Env) -> i128 {
+        get_config_value(&env, &DataKey::MinLiquidityReserveRatio)
+    }
+
+    /// Set minimum liquidity reserve ratio in basis points.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `ratio` - The minimum reserve ratio in basis points (e.g., 2000 = 20%)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or ratio is invalid
+    pub fn set_min_liquidity_reserve_ratio(env: Env, admin: Address, ratio: i128) {
+        require_admin(&env, &admin);
+        if ratio < 0 || ratio > 10000 {
+            panic!("invalid reserve ratio");
+        }
+        put_config_value(&env, &DataKey::MinLiquidityReserveRatio, ratio);
     }
 }
 

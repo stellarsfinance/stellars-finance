@@ -14,10 +14,24 @@ fn create_token_contract<'a>(
     )
 }
 
-fn create_mock_config_manager(env: &Env) -> Address {
-    // For unit tests, just generate a mock address
-    // Integration tests would deploy the actual ConfigManager contract
-    Address::generate(env)
+mod config_manager {
+    soroban_sdk::contractimport!(
+        file = "../../target/wasm32v1-none/release/config_manager.wasm"
+    );
+}
+
+fn create_mock_config_manager(env: &Env, admin: &Address) -> Address {
+    // Deploy actual ConfigManager contract for tests
+    let contract_id = env.register(config_manager::WASM, ());
+    let client = config_manager::Client::new(env, &contract_id);
+
+    // Initialize with admin
+    client.initialize(admin);
+
+    // Set minimum liquidity reserve ratio (e.g., 10% = 1000 bps)
+    client.set_min_liquidity_reserve_ratio(admin, &1000);
+
+    contract_id
 }
 
 #[test]
@@ -35,7 +49,7 @@ fn test_deposit_and_withdraw_happy_path() {
     token_admin.mint(&user1, &1000);
 
     // Deploy config manager (mock for unit tests)
-    let config_manager_id = create_mock_config_manager(&env);
+    let config_manager_id = create_mock_config_manager(&env, &admin);
 
     // Deploy liquidity pool contract
     let contract_id = env.register(LiquidityPool, ());
@@ -88,7 +102,7 @@ fn test_multiple_deposits() {
     token_admin.mint(&user2, &1000);
 
     // Deploy config manager (mock for unit tests)
-    let config_manager_id = create_mock_config_manager(&env);
+    let config_manager_id = create_mock_config_manager(&env, &admin);
 
     // Deploy liquidity pool contract
     let contract_id = env.register(LiquidityPool, ());
@@ -131,7 +145,7 @@ fn test_varying_deposit_sizes() {
     token_admin.mint(&user3, &10000);
 
     // Deploy config manager (mock for unit tests)
-    let config_manager_id = create_mock_config_manager(&env);
+    let config_manager_id = create_mock_config_manager(&env, &admin);
 
     // Deploy liquidity pool contract
     let contract_id = env.register(LiquidityPool, ());
@@ -196,7 +210,7 @@ fn test_extreme_values() {
     token_admin.mint(&user2, &1_000_000_000_000);
 
     // Deploy config manager (mock for unit tests)
-    let config_manager_id = create_mock_config_manager(&env);
+    let config_manager_id = create_mock_config_manager(&env, &admin);
 
     // Deploy liquidity pool contract
     let contract_id = env.register(LiquidityPool, ());

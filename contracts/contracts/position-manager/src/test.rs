@@ -6,6 +6,8 @@ use soroban_sdk::{testutils::Address as _, token, Address, Env};
 // Import the actual contracts for integration testing
 use crate::config_manager;
 use crate::oracle_integrator;
+use crate::liquidity_pool;
+use crate::market_manager;
 
 /// Helper to create a token contract for testing
 fn create_token_contract<'a>(
@@ -50,6 +52,16 @@ fn setup_test_environment<'a>(
     let oracle_client = oracle_integrator::Client::new(env, &oracle_id);
     oracle_client.initialize(&config_manager_id);
 
+    // Deploy MarketManager
+    let market_manager_id = env.register(market_manager::WASM, ());
+    let market_client = market_manager::Client::new(env, &market_manager_id);
+    market_client.initialize(&config_manager_id, &admin);
+
+    // Deploy LiquidityPool
+    let liquidity_pool_id = env.register(liquidity_pool::WASM, ());
+    let liquidity_client = liquidity_pool::Client::new(env, &liquidity_pool_id);
+    liquidity_client.initialize(&config_manager_id, &token_client.address);
+
     // Deploy PositionManager
     let position_manager_id = env.register(PositionManager, ());
     let position_client = PositionManagerClient::new(env, &position_manager_id);
@@ -57,11 +69,26 @@ fn setup_test_environment<'a>(
 
     // Configure ConfigManager with contract addresses
     config_client.set_oracle_integrator(&admin, &oracle_id);
+    config_client.set_market_manager(&admin, &market_manager_id);
+    config_client.set_liquidity_pool(&admin, &liquidity_pool_id);
     config_client.set_position_manager(&admin, &position_manager_id);
     config_client.set_token(&admin, &token_client.address);
 
+    // Set PositionManager in MarketManager (for authorization)
+    market_client.set_position_manager(&admin, &position_manager_id);
+
+    // Set PositionManager in LiquidityPool (for authorization)
+    liquidity_client.set_position_manager(&admin, &position_manager_id);
+
+    // Create a test market (market_id = 0, XLM-PERP)
+    market_client.create_market(&admin, &0u32, &1_000_000_000_000u128, &10000i128);
+
     // Mint tokens to trader for testing
     token_admin.mint(&trader, &10_000_000_000); // 10,000 tokens with 7 decimals
+
+    // Also deposit some initial liquidity to the pool
+    token_admin.mint(&admin, &100_000_000_000); // 100,000 tokens for initial liquidity
+    liquidity_client.deposit(&admin, &100_000_000_000);
 
     (
         config_manager_id,
