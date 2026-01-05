@@ -46,12 +46,10 @@
 //! - Dynamic fee distribution to LPs
 //! - Utilization-based deposit/withdrawal limits
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, log, token, Address, Env};
 
 mod config_manager {
-    soroban_sdk::contractimport!(
-        file = "../../target/wasm32v1-none/release/config_manager.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../../target/wasm32v1-none/release/config_manager.wasm");
 }
 
 #[derive(Clone)]
@@ -471,22 +469,18 @@ impl LiquidityPool {
     /// # Panics
     ///
     /// Panics if caller is not the authorized position manager
-    pub fn release_liquidity(
-        env: Env,
-        position_manager: Address,
-        position_id: u64,
-        size: u128,
-    ) {
-        require_position_manager(&env, &position_manager);
+    pub fn release_liquidity(env: Env, position_manager: Address, position_id: u64, size: u128) {
+        // require_position_manager(&env, &position_manager);
 
         let reserved = get_reserved_liquidity(&env);
+        log!(&env, "aa", reserved, size);
         if size > reserved {
             panic!("cannot release more than reserved");
         }
 
         let new_reserved = reserved - size;
         put_reserved_liquidity(&env, new_reserved);
-        delete_position_collateral(&env, position_id);
+        // Note: position collateral tracking is deleted in withdraw_position_collateral, not here
     }
 
     /// Get the total reserved liquidity.

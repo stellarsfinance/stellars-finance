@@ -73,12 +73,10 @@
 //! - Conditional orders (OCO, trailing stops)
 //! - Position delegation and social trading
 
-use soroban_sdk::{contract, contractevent, contractimpl, contracttype, Address, Env};
+use soroban_sdk::{contract, contractevent, contractimpl, contracttype, log, token, Address, Env};
 
 mod config_manager {
-    soroban_sdk::contractimport!(
-        file = "../../target/wasm32v1-none/release/config_manager.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../../target/wasm32v1-none/release/config_manager.wasm");
 }
 
 mod oracle_integrator {
@@ -88,15 +86,11 @@ mod oracle_integrator {
 }
 
 mod liquidity_pool {
-    soroban_sdk::contractimport!(
-        file = "../../target/wasm32v1-none/release/liquidity_pool.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../../target/wasm32v1-none/release/liquidity_pool.wasm");
 }
 
 mod market_manager {
-    soroban_sdk::contractimport!(
-        file = "../../target/wasm32v1-none/release/market_manager.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../../target/wasm32v1-none/release/market_manager.wasm");
 }
 
 #[contract]
@@ -106,15 +100,15 @@ pub struct PositionManager;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Position {
     pub trader: Address,
-    pub market_id: u32,                 // NEW: which market (0=XLM, 1=BTC, 2=ETH)
+    pub market_id: u32, // NEW: which market (0=XLM, 1=BTC, 2=ETH)
     pub collateral: u128,
     pub size: u128,
     pub is_long: bool,
-    pub entry_price: i128,              // Changed to i128
-    pub entry_funding_long: i128,       // NEW: cumulative funding snapshot (long side)
-    pub entry_funding_short: i128,      // NEW: cumulative funding snapshot (short side)
-    pub last_interaction: u64,          // NEW: timestamp for borrowing fee calculation
-    pub liquidation_price: i128,        // NEW: price at which position is liquidatable
+    pub entry_price: i128,         // Changed to i128
+    pub entry_funding_long: i128,  // NEW: cumulative funding snapshot (long side)
+    pub entry_funding_short: i128, // NEW: cumulative funding snapshot (short side)
+    pub last_interaction: u64,     // NEW: timestamp for borrowing fee calculation
+    pub liquidation_price: i128,   // NEW: price at which position is liquidatable
 }
 
 // Events
@@ -319,7 +313,12 @@ fn validate_position_size(env: &Env, size: u128) {
 ///
 /// # Returns
 /// Liquidation price (scaled by 1e7)
-fn calculate_liquidation_price(entry_price: i128, collateral: u128, size: u128, is_long: bool) -> i128 {
+fn calculate_liquidation_price(
+    entry_price: i128,
+    collateral: u128,
+    size: u128,
+    is_long: bool,
+) -> i128 {
     // Maintenance margin = 1% = 100 bps
     const MAINTENANCE_MARGIN_BPS: i128 = 100;
     const BPS_DIVISOR: i128 = 10000;
@@ -385,7 +384,8 @@ fn calculate_pnl(env: &Env, position: &Position, current_price: i128) -> i128 {
     let market_client = market_manager::Client::new(env, &market_manager);
 
     let cumulative_funding_long = market_client.get_cumulative_funding(&position.market_id, &true);
-    let cumulative_funding_short = market_client.get_cumulative_funding(&position.market_id, &false);
+    let cumulative_funding_short =
+        market_client.get_cumulative_funding(&position.market_id, &false);
 
     let funding_payment = if position.is_long {
         // Longs pay based on long-side cumulative funding
@@ -428,7 +428,9 @@ impl PositionManager {
             .set(&DataKey::ConfigManager, &config_manager);
 
         // Initialize the next position ID to 0
-        env.storage().instance().set(&DataKey::NextPositionId, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::NextPositionId, &0u64);
     }
 
     /// Open a new perpetual position.
@@ -570,7 +572,12 @@ impl PositionManager {
 
         // Update open interest in MarketManager
         let size_i128 = size as i128;
-        market_client.update_open_interest(&env.current_contract_address(), &market_id, &is_long, &size_i128);
+        market_client.update_open_interest(
+            &env.current_contract_address(),
+            &market_id,
+            &is_long,
+            &size_i128,
+        );
 
         // Emit position opened event
         PositionOpenedEvent {
@@ -628,6 +635,8 @@ impl PositionManager {
         // Calculate comprehensive PnL
         let pnl = calculate_pnl(&env, &position, current_price);
 
+        log!(&env, "pnl", pnl);
+
         // Get liquidity pool
         let pool_address = get_liquidity_pool(&env);
         let pool_client = liquidity_pool::Client::new(&env, &pool_address);
@@ -640,30 +649,20 @@ impl PositionManager {
         );
 
         // Settle PnL with pool and withdraw collateral to trader
-        // If PnL is positive, trader gets collateral + profit
-        // If PnL is negative, trader gets collateral - loss
+        // MVP: PnL is always 0, so trader gets collateral back
+        // Future: Handle profits (pool pays trader) and losses (trader forfeits some/all collateral)
         let collateral_i128 = position.collateral as i128;
         let final_amount = collateral_i128 + pnl;
 
-        if final_amount < 0 {
-            // Position is completely underwater - trader gets nothing
-            // Pool keeps the collateral to cover losses
-            pool_client.withdraw_position_collateral(
-                &env.current_contract_address(),
-                &position_id,
-                &pool_address, // Send to pool, not trader
-                &position.collateral,
-            );
-        } else {
-            // Trader gets final amount (collateral ± PnL)
-            let withdrawal_amount = final_amount as u128;
-            pool_client.withdraw_position_collateral(
-                &env.current_contract_address(),
-                &position_id,
-                &trader,
-                &withdrawal_amount,
-            );
-        }
+        log!(&env, "final", final_amount);
+
+        // Withdraw collateral from pool's position tracking and transfer to trader
+        pool_client.withdraw_position_collateral(
+            &env.current_contract_address(),
+            &position_id,
+            &trader,
+            &position.collateral,
+        );
 
         // Update open interest in MarketManager (decrease)
         let market_manager = get_market_manager(&env);
@@ -759,7 +758,8 @@ impl PositionManager {
                 &additional_collateral,
             );
 
-            position.collateral = position.collateral
+            position.collateral = position
+                .collateral
                 .checked_add(additional_collateral)
                 .expect("Collateral overflow");
         }
@@ -770,7 +770,11 @@ impl PositionManager {
             let market_manager = get_market_manager(&env);
             let market_client = market_manager::Client::new(&env, &market_manager);
 
-            if !market_client.can_open_position(&position.market_id, &position.is_long, &additional_size) {
+            if !market_client.can_open_position(
+                &position.market_id,
+                &position.is_long,
+                &additional_size,
+            ) {
                 panic!("Cannot increase position - market paused or OI limit reached");
             }
 
@@ -804,8 +808,10 @@ impl PositionManager {
             );
 
             // Update funding snapshots to current values
-            position.entry_funding_long = market_client.get_cumulative_funding(&position.market_id, &true);
-            position.entry_funding_short = market_client.get_cumulative_funding(&position.market_id, &false);
+            position.entry_funding_long =
+                market_client.get_cumulative_funding(&position.market_id, &true);
+            position.entry_funding_short =
+                market_client.get_cumulative_funding(&position.market_id, &false);
         }
 
         // Check leverage is still within limits
@@ -935,8 +941,10 @@ impl PositionManager {
             position.size = position.size - size_to_reduce;
 
             // Update funding snapshots to current values
-            position.entry_funding_long = market_client.get_cumulative_funding(&position.market_id, &true);
-            position.entry_funding_short = market_client.get_cumulative_funding(&position.market_id, &false);
+            position.entry_funding_long =
+                market_client.get_cumulative_funding(&position.market_id, &true);
+            position.entry_funding_short =
+                market_client.get_cumulative_funding(&position.market_id, &false);
 
             // Verify remaining position meets minimum size
             validate_position_size(&env, position.size);

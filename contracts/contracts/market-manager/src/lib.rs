@@ -77,12 +77,12 @@
 //! - Time-weighted average price (TWAP) funding calculations
 //! - Multi-asset collateral support per market
 
-use soroban_sdk::{contract, contractevent, contractimpl, contracttype, Address, Env, symbol_short};
+use soroban_sdk::{
+    contract, contractevent, contractimpl, contracttype, symbol_short, Address, Env,
+};
 
 mod config_manager {
-    soroban_sdk::contractimport!(
-        file = "../../target/wasm32v1-none/release/config_manager.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../../target/wasm32v1-none/release/config_manager.wasm");
 }
 
 // Data Structures
@@ -94,12 +94,12 @@ pub struct Market {
     pub max_open_interest: u128,
     pub long_open_interest: u128,
     pub short_open_interest: u128,
-    pub funding_rate: i128,             // bps per hour
+    pub funding_rate: i128, // bps per hour
     pub last_funding_update: u64,
-    pub cumulative_funding_long: i128,  // Total funding paid by longs
+    pub cumulative_funding_long: i128, // Total funding paid by longs
     pub cumulative_funding_short: i128, // Total funding paid by shorts
     pub is_paused: bool,
-    pub base_funding_rate: i128,        // Default: 100 (0.01% per hour)
+    pub base_funding_rate: i128, // Default: 100 (0.01% per hour)
     pub max_funding_rate: i128,
 }
 
@@ -175,9 +175,11 @@ fn set_market(env: &Env, market: &Market) {
 
 fn require_position_manager(env: &Env, caller: &Address) {
     caller.require_auth();
-    if let Some(authorized) = env.storage().instance().get::<DataKey, Address>(
-        &DataKey::AuthorizedPositionManager
-    ) {
+    if let Some(authorized) = env
+        .storage()
+        .instance()
+        .get::<DataKey, Address>(&DataKey::AuthorizedPositionManager)
+    {
         if caller != &authorized {
             panic!("unauthorized: not position manager");
         }
@@ -202,7 +204,9 @@ impl MarketManager {
             panic!("already initialized");
         }
 
-        env.storage().instance().set(&DataKey::ConfigManager, &config_manager);
+        env.storage()
+            .instance()
+            .set(&DataKey::ConfigManager, &config_manager);
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::MarketCount, &0u32);
     }
@@ -215,7 +219,9 @@ impl MarketManager {
     /// * `position_manager` - Address of the PositionManager contract
     pub fn set_position_manager(env: Env, admin: Address, position_manager: Address) {
         require_admin(&env, &admin);
-        env.storage().instance().set(&DataKey::AuthorizedPositionManager, &position_manager);
+        env.storage()
+            .instance()
+            .set(&DataKey::AuthorizedPositionManager, &position_manager);
     }
 
     /// Create a new perpetual market.
@@ -258,8 +264,14 @@ impl MarketManager {
         set_market(&env, &market);
 
         // Increment market count
-        let count: u32 = env.storage().instance().get(&DataKey::MarketCount).unwrap_or(0);
-        env.storage().instance().set(&DataKey::MarketCount, &(count + 1));
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MarketCount)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::MarketCount, &(count + 1));
 
         // Emit event
         MarketCreatedEvent {
@@ -277,6 +289,8 @@ impl MarketManager {
     ///
     /// * `caller` - Address calling this function
     /// * `market_id` - The market identifier
+    ///
+    /// TODO: Bot sollte admin sein? oder kann jeder diese function callen?
     pub fn update_funding_rate(env: Env, caller: Address, market_id: u32) {
         caller.require_auth();
 
@@ -295,7 +309,8 @@ impl MarketManager {
         }
 
         // Calculate total OI
-        let total_oi = market.long_open_interest
+        let total_oi = market
+            .long_open_interest
             .checked_add(market.short_open_interest)
             .expect("OI overflow");
 
@@ -416,7 +431,8 @@ impl MarketManager {
             // Update long OI
             if size_delta > 0 {
                 // Opening or increasing position
-                let new_long_oi = market.long_open_interest
+                let new_long_oi = market
+                    .long_open_interest
                     .checked_add(size_delta as u128)
                     .expect("long OI overflow");
 
@@ -437,7 +453,8 @@ impl MarketManager {
         } else {
             // Update short OI
             if size_delta > 0 {
-                let new_short_oi = market.short_open_interest
+                let new_short_oi = market
+                    .short_open_interest
                     .checked_add(size_delta as u128)
                     .expect("short OI overflow");
 
@@ -509,7 +526,8 @@ impl MarketManager {
         market.is_paused = false;
         set_market(&env, &market);
 
-        env.events().publish((symbol_short!("unpaused"),), market_id);
+        env.events()
+            .publish((symbol_short!("unpaused"),), market_id);
     }
 
     /// Check if a market is currently paused.
@@ -538,7 +556,11 @@ impl MarketManager {
     ///
     /// True if position can be opened, false otherwise
     pub fn can_open_position(env: Env, market_id: u32, is_long: bool, size: u128) -> bool {
-        let market = match env.storage().instance().get::<DataKey, Market>(&DataKey::Market(market_id)) {
+        let market = match env
+            .storage()
+            .instance()
+            .get::<DataKey, Market>(&DataKey::Market(market_id))
+        {
             Some(m) => m,
             None => return false, // Market doesn't exist
         };
