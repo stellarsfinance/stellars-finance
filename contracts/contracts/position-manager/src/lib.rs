@@ -1092,7 +1092,13 @@ impl PositionManager {
 
             // Pay keeper first (up to their reward amount)
             if keeper_reward > 0 {
-                keeper_payment = keeper_reward.min(available as i128) as u128;
+                let keeper_reward_u128 = keeper_reward as u128;
+                keeper_payment = if keeper_reward_u128 > available {
+                    available
+                } else {
+                    keeper_reward_u128
+                };
+
                 if keeper_payment > 0 {
                     pool_client.withdraw_position_collateral(
                         &env.current_contract_address(),

@@ -1,0 +1,17 @@
+[package]
+name = "stellars-finance-integration-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+soroban-sdk = "23.0.2"
+
+[dev-dependencies]
+soroban-sdk = { version = "23.0.2", features = ["testutils"] }
+
+[[test]]
+name = "integration"
+path = "integration.rs"
+
+[features]
+default = []
