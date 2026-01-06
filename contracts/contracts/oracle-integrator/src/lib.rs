@@ -123,11 +123,20 @@
 //! - Support for additional oracle networks (Chainlink, Band, etc.)
 //! - Historical price data retention for analytics
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Map, String};
+
+#[cfg(not(test))]
+mod config_manager {
+    soroban_sdk::contractimport!(
+        file = "../../../target/wasm32-unknown-unknown/release/config_manager.wasm"
+    );
+}
 
 #[contracttype]
 pub enum DataKey {
     ConfigManager,
+    TestMode,              // bool: test mode enabled/disabled
+    TestBasePrice(u32),    // i128: base price per market_id for simulation
 }
 
 /// Get the ConfigManager address from storage
@@ -136,6 +145,106 @@ fn get_config_manager(env: &Env) -> Address {
         .instance()
         .get(&DataKey::ConfigManager)
         .expect("ConfigManager not initialized")
+}
+
+/// Get asset symbols for oracle queries
+/// Returns (dia_symbol, reflector_symbol)
+fn get_asset_symbol(env: &Env, market_id: u32) -> (String, String) {
+    match market_id {
+        0 => (
+            String::from_str(env, "XLM/USD"),
+            String::from_str(env, "XLM"),
+        ),
+        1 => (
+            String::from_str(env, "BTC/USD"),
+            String::from_str(env, "Bitcoin"),
+        ),
+        2 => (
+            String::from_str(env, "ETH/USD"),
+            String::from_str(env, "Ethereum"),
+        ),
+        _ => panic!("unsupported market_id: {}", market_id),
+    }
+}
+
+/// Check if test mode is enabled
+fn is_test_mode(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::TestMode)
+        .unwrap_or(false)
+}
+
+/// Get simulated price for testing
+/// Returns (price, timestamp)
+fn get_simulated_price(env: &Env, market_id: u32) -> (i128, u64) {
+    let base_price = env
+        .storage()
+        .instance()
+        .get(&DataKey::TestBasePrice(market_id))
+        .unwrap_or(100_000_000);
+
+    let timestamp = env.ledger().timestamp();
+
+    // Create predictable price oscillation: ±10% per hour
+    let time_in_hour = (timestamp % 3600) as i128;
+    let variation = (base_price * time_in_hour) / 36000; // Max ±10%
+    let oscillating_multiplier = if (timestamp / 1800) % 2 == 0 { 1 } else { -1 };
+
+    let price = base_price + (variation * oscillating_multiplier);
+    (price, timestamp)
+}
+
+/// Validate oracle price for staleness and bounds
+#[cfg(not(test))]
+fn validate_oracle_price(env: &Env, price: i128, timestamp: u64) {
+    // Staleness check
+    let config_manager = get_config_manager(env);
+    let config_client = config_manager::Client::new(env, &config_manager);
+    let staleness_threshold = config_client.price_staleness_threshold();
+    let current_time = env.ledger().timestamp();
+
+    if current_time - timestamp > staleness_threshold {
+        panic!(
+            "stale price: age {} seconds exceeds threshold {}",
+            current_time - timestamp,
+            staleness_threshold
+        );
+    }
+
+    // Bounds check
+    if price <= 0 {
+        panic!("invalid price: must be positive");
+    }
+
+    // Sanity check: price should be reasonable (< $1 trillion)
+    if price > 1_000_000_000_000_000_000 {
+        panic!("invalid price: exceeds maximum bound");
+    }
+}
+
+/// Validate price deviation between oracles
+#[cfg(not(test))]
+fn validate_price_deviation(env: &Env, price1: i128, price2: i128) {
+    let config_manager = get_config_manager(env);
+    let config_client = config_manager::Client::new(env, &config_manager);
+    let max_deviation_bps = config_client.max_price_deviation_bps();
+
+    // Calculate percentage deviation
+    let diff = if price1 > price2 {
+        price1 - price2
+    } else {
+        price2 - price1
+    };
+    let avg = (price1 + price2) / 2;
+    let deviation_bps = (diff * 10000) / avg;
+
+    if deviation_bps > max_deviation_bps {
+        panic!(
+            "excessive price deviation: {}bps exceeds threshold {}bps - possible manipulation",
+            deviation_bps, max_deviation_bps
+        );
+    }
 }
 
 #[contract]
@@ -155,32 +264,100 @@ impl OracleIntegrator {
             .set(&DataKey::ConfigManager, &config_manager);
     }
 
+    /// Enable or disable test mode with base prices.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address (must match ConfigManager admin)
+    /// * `enabled` - Whether to enable test mode
+    /// * `base_prices` - Map of market_id to base price for simulation
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin
+    pub fn set_test_mode(env: Env, admin: Address, enabled: bool, base_prices: Map<u32, i128>) {
+        admin.require_auth();
+
+        // Verify admin through ConfigManager (only in non-test environments)
+        #[cfg(not(test))]
+        {
+            let config_manager = get_config_manager(&env);
+            let config_client = config_manager::Client::new(&env, &config_manager);
+            let admin_addr = config_client.admin();
+            if admin != admin_addr {
+                panic!("unauthorized");
+            }
+        }
+
+        // Set test mode flag
+        env.storage().instance().set(&DataKey::TestMode, &enabled);
+
+        // Store base prices for each market
+        for (market_id, price) in base_prices.iter() {
+            env.storage()
+                .instance()
+                .set(&DataKey::TestBasePrice(market_id), &price);
+        }
+    }
+
+    /// Check if test mode is enabled.
+    ///
+    /// # Returns
+    ///
+    /// True if test mode is enabled, false otherwise
+    pub fn get_test_mode(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::TestMode)
+            .unwrap_or(false)
+    }
+
     /// Get the current price for a specific asset from all oracle sources.
     ///
     /// # Arguments
     ///
-    /// * `asset_id` - The asset identifier (e.g., "XLM", "BTC", "ETH")
+    /// * `market_id` - The market identifier (0=XLM, 1=BTC, 2=ETH)
     ///
     /// # Returns
     ///
-    /// The aggregated (median) price with confidence indicator
+    /// The aggregated (median) price
     ///
-    /// # MVP Implementation
+    /// # Implementation
     ///
-    /// Returns a fixed mock price of 100_000_000 (representing $1.00 with 7 decimals).
-    /// This ensures consistent pricing for MVP testing without price fluctuations.
-    pub fn get_price(_env: Env, _asset_id: u32) -> i128 {
-        // MVP: Return fixed price (100_000_000 = $1.00 with 7 decimals)
-        // In production, this would:
-        // - Query Pyth Network oracle contract
-        // - Query DIA oracle contract
-        // - Query Reflector oracle contract
-        // - Validate each price (timestamp, bounds)
-        // - Calculate median of valid prices
-        // - Store in temporary storage with TTL
-        // - Check for excessive deviation between sources
-        // - Return median price
-        100_000_000
+    /// In test mode: Returns time-based simulated price
+    /// In production mode: Fetches from DIA and Reflector, validates, returns median
+    pub fn get_price(env: Env, market_id: u32) -> i128 {
+        // Test mode bypass
+        if is_test_mode(&env) {
+            let (price, _) = get_simulated_price(&env, market_id);
+            return price;
+        }
+
+        // Production mode: fetch from both oracles
+        #[cfg(not(test))]
+        {
+            let (dia_price, dia_timestamp) = Self::fetch_dia_price(env.clone(), market_id);
+            let (reflector_price, reflector_timestamp) =
+                Self::fetch_reflector_price(env.clone(), market_id);
+
+            // Validate each price
+            validate_oracle_price(&env, dia_price, dia_timestamp);
+            validate_oracle_price(&env, reflector_price, reflector_timestamp);
+
+            // Check deviation between oracles
+            validate_price_deviation(&env, dia_price, reflector_price);
+
+            // Calculate median (average of 2 prices)
+            let median_price = (dia_price + reflector_price) / 2;
+
+            median_price
+        }
+
+        #[cfg(test)]
+        {
+            // In test builds, if not in test mode, panic with clear message
+            panic!("Production oracle integration not available in test mode - use set_test_mode");
+        }
     }
 
     /// Fetch price from Pyth Network oracle.
@@ -205,36 +382,68 @@ impl OracleIntegrator {
     ///
     /// # Arguments
     ///
-    /// * `asset_id` - The asset identifier
+    /// * `market_id` - The market identifier
     ///
     /// # Returns
     ///
     /// Tuple of (price, timestamp)
-    pub fn fetch_dia_price(_env: Env, _asset_id: u32) -> (i128, u64) {
-        // TODO: Implement DIA price fetching
-        // - Call DIA oracle contract
-        // - Parse price feed data
-        // - Extract price and timestamp
-        // - Return price data
-        (0, 0)
+    pub fn fetch_dia_price(env: Env, market_id: u32) -> (i128, u64) {
+        #[cfg(not(test))]
+        {
+            let config_manager = get_config_manager(&env);
+            let config_client = config_manager::Client::new(&env, &config_manager);
+            let _dia_address = config_client.dia_oracle();
+
+            let (dia_symbol, _) = get_asset_symbol(&env, market_id);
+
+            // TODO: Replace with actual DIA oracle contract call
+            // This requires DIA oracle WASM interface
+            // For now, panic with clear error message
+            panic!(
+                "DIA oracle integration not yet implemented - requires DIA contract interface for symbol: {}",
+                dia_symbol
+            );
+        }
+
+        #[cfg(test)]
+        {
+            // Test stub - should not be called in test mode
+            panic!("fetch_dia_price should not be called in test builds - market_id: {}", market_id);
+        }
     }
 
     /// Fetch price from Reflector oracle.
     ///
     /// # Arguments
     ///
-    /// * `asset_id` - The asset identifier
+    /// * `market_id` - The market identifier
     ///
     /// # Returns
     ///
     /// Tuple of (price, timestamp)
-    pub fn fetch_reflector_price(_env: Env, _asset_id: u32) -> (i128, u64) {
-        // TODO: Implement Reflector price fetching
-        // - Call Reflector oracle contract
-        // - Parse price feed data
-        // - Extract price and timestamp
-        // - Return price data
-        (0, 0)
+    pub fn fetch_reflector_price(env: Env, market_id: u32) -> (i128, u64) {
+        #[cfg(not(test))]
+        {
+            let config_manager = get_config_manager(&env);
+            let config_client = config_manager::Client::new(&env, &config_manager);
+            let _reflector_address = config_client.reflector_oracle();
+
+            let (_, reflector_symbol) = get_asset_symbol(&env, market_id);
+
+            // TODO: Use sep-40-oracle crate for Reflector integration
+            // This requires proper sep-40-oracle client setup
+            // For now, panic with clear error message
+            panic!(
+                "Reflector oracle integration not yet implemented - requires sep-40-oracle setup for symbol: {}",
+                reflector_symbol
+            );
+        }
+
+        #[cfg(test)]
+        {
+            // Test stub - should not be called in test mode
+            panic!("fetch_reflector_price should not be called in test builds - market_id: {}", market_id);
+        }
     }
 
     /// Validate a price feed for staleness and bounds.
@@ -268,18 +477,20 @@ impl OracleIntegrator {
     ///
     /// # Arguments
     ///
-    /// * `prices` - Array of prices from different oracles
+    /// * `price1` - Price from first oracle
+    /// * `price2` - Price from second oracle
     ///
     /// # Returns
     ///
-    /// The median price
-    pub fn calculate_median(_env: Env) -> i128 {
-        // TODO: Implement median calculation
-        // - Sort prices array
-        // - If odd number of prices, return middle value
-        // - If even number of prices, return average of two middle values
-        // - Return median
-        0
+    /// The median price (average of 2 prices)
+    pub fn calculate_median(_env: Env, price1: i128, price2: i128) -> i128 {
+        // With 2 oracles, median equals average
+        // Use checked arithmetic to prevent overflow
+        price1
+            .checked_add(price2)
+            .expect("price addition overflow")
+            .checked_div(2)
+            .expect("division error")
     }
 
     /// Check if price deviation between sources exceeds threshold.

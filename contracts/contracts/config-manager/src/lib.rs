@@ -143,6 +143,8 @@ pub enum DataKey {
     PositionManagerContract,
     MarketManagerContract,
     OracleIntegratorContract,
+    DiaOracleContract,
+    ReflectorOracleContract,
     TokenContract,
     // Trading parameters
     MinLeverage,
@@ -552,6 +554,54 @@ impl ConfigManager {
     /// The Token contract address
     pub fn token(env: Env) -> Address {
         get_contract_address(&env, &DataKey::TokenContract)
+    }
+
+    /// Set the DIA Oracle contract address.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `contract` - The DIA Oracle contract address
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin
+    pub fn set_dia_oracle(env: Env, admin: Address, contract: Address) {
+        require_admin(&env, &admin);
+        put_contract_address(&env, &DataKey::DiaOracleContract, &contract);
+    }
+
+    /// Get the DIA Oracle contract address.
+    ///
+    /// # Returns
+    ///
+    /// The DIA Oracle contract address
+    pub fn dia_oracle(env: Env) -> Address {
+        get_contract_address(&env, &DataKey::DiaOracleContract)
+    }
+
+    /// Set the Reflector Oracle contract address.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `contract` - The Reflector Oracle contract address
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin
+    pub fn set_reflector_oracle(env: Env, admin: Address, contract: Address) {
+        require_admin(&env, &admin);
+        put_contract_address(&env, &DataKey::ReflectorOracleContract, &contract);
+    }
+
+    /// Get the Reflector Oracle contract address.
+    ///
+    /// # Returns
+    ///
+    /// The Reflector Oracle contract address
+    pub fn reflector_oracle(env: Env) -> Address {
+        get_contract_address(&env, &DataKey::ReflectorOracleContract)
     }
 
     /// Get maximum pool utilization ratio in basis points.
