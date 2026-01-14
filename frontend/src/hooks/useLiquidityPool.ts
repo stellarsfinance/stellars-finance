@@ -18,6 +18,9 @@ import {
   fromContractAmount,
   toContractAmount,
   calculateUserShareValue,
+  getReservedLiquidity,
+  getAvailableLiquidity,
+  getUtilizationRatio,
 } from '../services/liquidityPool';
 import { signTransaction } from '@stellar/freighter-api';
 
@@ -28,6 +31,9 @@ export const LIQUIDITY_POOL_KEYS = {
   totalDeposits: () => ['liquidityPool', 'totalDeposits'] as const,
   userTokenBalance: (address: string) => ['liquidityPool', 'userTokenBalance', address] as const,
   userShareValue: (address: string) => ['liquidityPool', 'userShareValue', address] as const,
+  reservedLiquidity: () => ['liquidityPool', 'reservedLiquidity'] as const,
+  availableLiquidity: () => ['liquidityPool', 'availableLiquidity'] as const,
+  utilization: () => ['liquidityPool', 'utilization'] as const,
 };
 
 /**
@@ -237,6 +243,63 @@ export function useWithdraw() {
 }
 
 /**
+ * Hook to get reserved liquidity
+ * @returns Query result with reserved liquidity
+ */
+export function useReservedLiquidity() {
+  return useQuery({
+    queryKey: LIQUIDITY_POOL_KEYS.reservedLiquidity(),
+    queryFn: async () => {
+      const reserved = await getReservedLiquidity();
+      return {
+        raw: reserved,
+        formatted: fromContractAmount(reserved),
+      };
+    },
+    staleTime: 10000,
+    refetchInterval: 30000,
+  });
+}
+
+/**
+ * Hook to get available liquidity
+ * @returns Query result with available liquidity
+ */
+export function useAvailableLiquidity() {
+  return useQuery({
+    queryKey: LIQUIDITY_POOL_KEYS.availableLiquidity(),
+    queryFn: async () => {
+      const available = await getAvailableLiquidity();
+      return {
+        raw: available,
+        formatted: fromContractAmount(available),
+      };
+    },
+    staleTime: 10000,
+    refetchInterval: 30000,
+  });
+}
+
+/**
+ * Hook to get pool utilization ratio
+ * @returns Query result with utilization ratio as percentage
+ */
+export function useUtilizationRatio() {
+  return useQuery({
+    queryKey: LIQUIDITY_POOL_KEYS.utilization(),
+    queryFn: async () => {
+      const utilizationBps = await getUtilizationRatio();
+      return {
+        bps: utilizationBps,
+        percentage: utilizationBps / 100,
+      };
+    },
+    staleTime: 10000,
+    refetchInterval: 30000,
+  });
+}
+
+/**
  * Hook to get all pool data at once
  * @returns Combined pool statistics
  */
@@ -246,6 +309,9 @@ export function usePoolStats() {
   const totalDeposits = useTotalDeposits();
   const userTokenBalance = useUserTokenBalance();
   const userShareValue = useUserShareValue();
+  const reservedLiquidity = useReservedLiquidity();
+  const availableLiquidity = useAvailableLiquidity();
+  const utilization = useUtilizationRatio();
 
   return {
     userShares: userShares.data?.formatted || 0,
@@ -253,17 +319,26 @@ export function usePoolStats() {
     totalDeposits: totalDeposits.data?.formatted || 0,
     userTokenBalance: userTokenBalance.data?.formatted || 0,
     userShareValue: userShareValue.data?.formatted || 0,
+    reservedLiquidity: reservedLiquidity.data?.formatted || 0,
+    availableLiquidity: availableLiquidity.data?.formatted || 0,
+    utilization: utilization.data?.percentage || 0,
     isLoading:
       userShares.isLoading ||
       totalShares.isLoading ||
       totalDeposits.isLoading ||
       userTokenBalance.isLoading ||
-      userShareValue.isLoading,
+      userShareValue.isLoading ||
+      reservedLiquidity.isLoading ||
+      availableLiquidity.isLoading ||
+      utilization.isLoading,
     isError:
       userShares.isError ||
       totalShares.isError ||
       totalDeposits.isError ||
       userTokenBalance.isError ||
-      userShareValue.isError,
+      userShareValue.isError ||
+      reservedLiquidity.isError ||
+      availableLiquidity.isError ||
+      utilization.isError,
   };
 }

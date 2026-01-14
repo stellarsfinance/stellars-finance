@@ -56,6 +56,12 @@ export type DataKey = {
     tag: "PriceStalenessThreshold";
     values: void;
 } | {
+    tag: "MaxUtilizationRatio";
+    values: void;
+} | {
+    tag: "MinLiquidityReserveRatio";
+    values: void;
+} | {
     tag: "Config";
     values: readonly [string];
 };
@@ -657,6 +663,28 @@ export interface Client {
         simulate?: boolean;
     }) => Promise<AssembledTransaction<i128>>;
     /**
+     * Construct and simulate a max_utilization_ratio transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Get maximum pool utilization ratio in basis points.
+     *
+     * # Returns
+     *
+     * Maximum utilization ratio in basis points (default: 8000 = 80%)
+     */
+    max_utilization_ratio: (options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<i128>>;
+    /**
      * Construct and simulate a set_oracle_integrator transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
      * Set the Oracle Integrator contract address.
      *
@@ -730,6 +758,88 @@ export interface Client {
          */
         simulate?: boolean;
     }) => Promise<AssembledTransaction<u64>>;
+    /**
+     * Construct and simulate a set_max_utilization_ratio transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Set maximum pool utilization ratio in basis points.
+     *
+     * # Arguments
+     *
+     * * `admin` - The administrator address
+     * * `ratio` - The maximum utilization ratio in basis points (e.g., 8000 = 80%)
+     *
+     * # Panics
+     *
+     * Panics if caller is not the admin or ratio is invalid
+     */
+    set_max_utilization_ratio: ({ admin, ratio }: {
+        admin: string;
+        ratio: i128;
+    }, options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<null>>;
+    /**
+     * Construct and simulate a min_liquidity_reserve_ratio transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Get minimum liquidity reserve ratio in basis points.
+     *
+     * # Returns
+     *
+     * Minimum reserve ratio in basis points (default: 2000 = 20%)
+     */
+    min_liquidity_reserve_ratio: (options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<i128>>;
+    /**
+     * Construct and simulate a set_min_liquidity_reserve_ratio transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Set minimum liquidity reserve ratio in basis points.
+     *
+     * # Arguments
+     *
+     * * `admin` - The administrator address
+     * * `ratio` - The minimum reserve ratio in basis points (e.g., 2000 = 20%)
+     *
+     * # Panics
+     *
+     * Panics if caller is not the admin or ratio is invalid
+     */
+    set_min_liquidity_reserve_ratio: ({ admin, ratio }: {
+        admin: string;
+        ratio: i128;
+    }, options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<null>>;
 }
 export declare class Client extends ContractClient {
     readonly options: ContractClientOptions;
@@ -769,8 +879,12 @@ export declare class Client extends ContractClient {
         liquidation_fee_bps: (json: string) => AssembledTransaction<bigint>;
         set_position_manager: (json: string) => AssembledTransaction<null>;
         liquidation_threshold: (json: string) => AssembledTransaction<bigint>;
+        max_utilization_ratio: (json: string) => AssembledTransaction<bigint>;
         set_oracle_integrator: (json: string) => AssembledTransaction<null>;
         max_price_deviation_bps: (json: string) => AssembledTransaction<bigint>;
         price_staleness_threshold: (json: string) => AssembledTransaction<bigint>;
+        set_max_utilization_ratio: (json: string) => AssembledTransaction<null>;
+        min_liquidity_reserve_ratio: (json: string) => AssembledTransaction<bigint>;
+        set_min_liquidity_reserve_ratio: (json: string) => AssembledTransaction<null>;
     };
 }

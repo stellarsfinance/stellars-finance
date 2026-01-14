@@ -1,10 +1,13 @@
 #![cfg(test)]
 
 use super::*;
+use soroban_sdk::log;
 use soroban_sdk::{testutils::Address as _, token, Address, Env};
 
 // Import the actual contracts for integration testing
 use crate::config_manager;
+use crate::liquidity_pool;
+use crate::market_manager;
 use crate::oracle_integrator;
 
 /// Helper to create a token contract for testing
@@ -31,6 +34,7 @@ fn setup_test_environment<'a>(
     token::StellarAssetClient<'a>, // token_admin
     Address,                       // admin
     Address,                       // trader
+    Address,                       // liquidity pool
 ) {
     env.mock_all_auths();
 
@@ -50,6 +54,16 @@ fn setup_test_environment<'a>(
     let oracle_client = oracle_integrator::Client::new(env, &oracle_id);
     oracle_client.initialize(&config_manager_id);
 
+    // Deploy MarketManager
+    let market_manager_id = env.register(market_manager::WASM, ());
+    let market_client = market_manager::Client::new(env, &market_manager_id);
+    market_client.initialize(&config_manager_id, &admin);
+
+    // Deploy LiquidityPool
+    let liquidity_pool_id = env.register(liquidity_pool::WASM, ());
+    let liquidity_client = liquidity_pool::Client::new(env, &liquidity_pool_id);
+    liquidity_client.initialize(&config_manager_id, &token_client.address);
+
     // Deploy PositionManager
     let position_manager_id = env.register(PositionManager, ());
     let position_client = PositionManagerClient::new(env, &position_manager_id);
@@ -57,11 +71,28 @@ fn setup_test_environment<'a>(
 
     // Configure ConfigManager with contract addresses
     config_client.set_oracle_integrator(&admin, &oracle_id);
+    config_client.set_market_manager(&admin, &market_manager_id);
+    config_client.set_liquidity_pool(&admin, &liquidity_pool_id);
     config_client.set_position_manager(&admin, &position_manager_id);
     config_client.set_token(&admin, &token_client.address);
 
+    // Set PositionManager in MarketManager (for authorization)
+    market_client.set_position_manager(&admin, &position_manager_id);
+
+    // Set PositionManager in LiquidityPool (for authorization)
+    liquidity_client.set_position_manager(&admin, &position_manager_id);
+
+    // Create test markets
+    market_client.create_market(&admin, &0u32, &1_000_000_000_000u128, &10000i128); // XLM-PERP
+    market_client.create_market(&admin, &1u32, &1_000_000_000_000u128, &10000i128); // BTC-PERP
+    market_client.create_market(&admin, &2u32, &1_000_000_000_000u128, &10000i128); // ETH-PERP
+
     // Mint tokens to trader for testing
     token_admin.mint(&trader, &10_000_000_000); // 10,000 tokens with 7 decimals
+
+    // Also deposit some initial liquidity to the pool
+    token_admin.mint(&admin, &100_000_000_000); // 100,000 tokens for initial liquidity
+    liquidity_client.deposit(&admin, &100_000_000_000);
 
     (
         config_manager_id,
@@ -72,6 +103,7 @@ fn setup_test_environment<'a>(
         token_admin,
         admin,
         trader,
+        liquidity_pool_id,
     )
 }
 
@@ -103,11 +135,13 @@ fn test_open_position_success() {
         _token_admin,
         _admin,
         trader,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
 
     let initial_balance = token_client.balance(&trader);
+    let initial_contract_balance = token_client.balance(&liquidity_pool_id);
 
     // Open a position
     let market_id = 0u32; // XLM-PERP
@@ -125,9 +159,14 @@ fn test_open_position_success() {
     let new_balance = token_client.balance(&trader);
     assert_eq!(new_balance as u128, (initial_balance as u128) - collateral);
 
-    // Verify contract received collateral
-    let contract_balance = token_client.balance(&position_manager_id);
-    assert_eq!(contract_balance as u128, collateral);
+    // Verify colleteral exisits on liquidity pool
+
+    // Verify liquidity contract received collateral
+    let final_contract_balance = token_client.balance(&liquidity_pool_id);
+    assert_eq!(
+        (final_contract_balance - initial_contract_balance) as u128,
+        collateral
+    );
 
     // Verify position was stored correctly
     let position = position_client.get_position(&position_id);
@@ -150,6 +189,7 @@ fn test_close_position_success() {
         _token_admin,
         _admin,
         trader,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
@@ -173,7 +213,10 @@ fn test_close_position_success() {
 
     // Verify collateral was returned
     let final_balance = token_client.balance(&trader);
-    assert_eq!(final_balance as u128, (balance_after_open as u128) + collateral);
+    assert_eq!(
+        final_balance as u128,
+        (balance_after_open as u128) + collateral
+    );
 
     // Verify contract balance is 0
     let contract_balance = token_client.balance(&position_manager_id);
@@ -192,34 +235,17 @@ fn test_multiple_positions() {
         _token_admin,
         _admin,
         trader,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
 
     // Open multiple positions
-    let pos1 = position_client.open_position(
-        &trader,
-        &0u32,
-        &1_000_000_000u128,
-        &10u32,
-        &true,
-    );
+    let pos1 = position_client.open_position(&trader, &0u32, &1_000_000_000u128, &10u32, &true);
 
-    let pos2 = position_client.open_position(
-        &trader,
-        &1u32,
-        &2_000_000_000u128,
-        &10u32,
-        &false,
-    );
+    let pos2 = position_client.open_position(&trader, &1u32, &2_000_000_000u128, &10u32, &false);
 
-    let pos3 = position_client.open_position(
-        &trader,
-        &2u32,
-        &500_000_000u128,
-        &10u32,
-        &true,
-    );
+    let pos3 = position_client.open_position(&trader, &2u32, &500_000_000u128, &10u32, &true);
 
     // Verify position IDs are sequential
     assert_eq!(pos1, 0);
@@ -239,19 +265,23 @@ fn test_multiple_positions() {
     assert_eq!(position3.collateral, 500_000_000);
     assert_eq!(position3.is_long, true);
 
-    // Verify total collateral in contract
+    // Verify total collateral in liquidity pool (collateral is held by pool, not position manager)
     let total_collateral: u128 = 1_000_000_000 + 2_000_000_000 + 500_000_000;
-    let contract_balance = token_client.balance(&position_manager_id);
-    assert_eq!(contract_balance as u128, total_collateral);
+    let initial_pool_balance = 100_000_000_000u128; // Initial liquidity deposited in setup
+    let pool_balance = token_client.balance(&liquidity_pool_id);
+    assert_eq!(
+        pool_balance as u128,
+        initial_pool_balance + total_collateral
+    );
 
     // Close middle position
     position_client.close_position(&trader, &pos2);
 
     // Verify collateral was returned for pos2
-    let contract_balance_after_close = token_client.balance(&position_manager_id);
+    let pool_balance_after_close = token_client.balance(&liquidity_pool_id);
     assert_eq!(
-        contract_balance_after_close as u128,
-        total_collateral - 2_000_000_000
+        pool_balance_after_close as u128,
+        initial_pool_balance + total_collateral - 2_000_000_000
     );
 }
 
@@ -267,6 +297,7 @@ fn test_open_and_close_full_workflow() {
         _token_admin,
         _admin,
         trader,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
@@ -274,13 +305,8 @@ fn test_open_and_close_full_workflow() {
     let initial_balance = token_client.balance(&trader);
 
     // Open position
-    let position_id = position_client.open_position(
-        &trader,
-        &0u32,
-        &1_000_000_000u128,
-        &10u32,
-        &true,
-    );
+    let position_id =
+        position_client.open_position(&trader, &0u32, &1_000_000_000u128, &10u32, &true);
 
     // Close position
     let pnl = position_client.close_position(&trader, &position_id);
@@ -304,6 +330,7 @@ fn test_open_position_zero_collateral() {
         _token_admin,
         _admin,
         trader,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
@@ -325,6 +352,7 @@ fn test_open_position_zero_leverage() {
         _token_admin,
         _admin,
         trader,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
@@ -346,6 +374,7 @@ fn test_get_nonexistent_position() {
         _token_admin,
         _admin,
         _trader,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
@@ -367,18 +396,14 @@ fn test_close_position_unauthorized() {
         _token_admin,
         _admin,
         trader,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
 
     // Trader opens a position
-    let position_id = position_client.open_position(
-        &trader,
-        &0u32,
-        &1_000_000_000u128,
-        &10u32,
-        &true,
-    );
+    let position_id =
+        position_client.open_position(&trader, &0u32, &1_000_000_000u128, &10u32, &true);
 
     // Different user tries to close it
     let other_user = Address::generate(&env);
@@ -398,6 +423,7 @@ fn test_open_position_leverage_too_low() {
         _token_admin,
         _admin,
         trader,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
@@ -419,6 +445,7 @@ fn test_open_position_leverage_too_high() {
         _token_admin,
         _admin,
         trader,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
@@ -440,6 +467,7 @@ fn test_open_position_size_too_small() {
         _token_admin,
         _admin,
         trader,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
@@ -460,6 +488,7 @@ fn test_get_user_positions_empty() {
         _token_admin,
         _admin,
         trader,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
@@ -483,18 +512,14 @@ fn test_get_user_positions_single() {
         _token_admin,
         _admin,
         trader,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
 
     // Open a single position
-    let position_id = position_client.open_position(
-        &trader,
-        &0u32,
-        &1_000_000_000u128,
-        &10u32,
-        &true,
-    );
+    let position_id =
+        position_client.open_position(&trader, &0u32, &1_000_000_000u128, &10u32, &true);
 
     // Get user positions
     let user_positions = position_client.get_user_open_positions(&trader);
@@ -516,34 +541,17 @@ fn test_get_user_positions_multiple() {
         _token_admin,
         _admin,
         trader,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
 
     // Open multiple positions
-    let pos1 = position_client.open_position(
-        &trader,
-        &0u32,
-        &1_000_000_000u128,
-        &10u32,
-        &true,
-    );
+    let pos1 = position_client.open_position(&trader, &0u32, &1_000_000_000u128, &10u32, &true);
 
-    let pos2 = position_client.open_position(
-        &trader,
-        &1u32,
-        &2_000_000_000u128,
-        &10u32,
-        &false,
-    );
+    let pos2 = position_client.open_position(&trader, &1u32, &2_000_000_000u128, &10u32, &false);
 
-    let pos3 = position_client.open_position(
-        &trader,
-        &2u32,
-        &500_000_000u128,
-        &10u32,
-        &true,
-    );
+    let pos3 = position_client.open_position(&trader, &2u32, &500_000_000u128, &10u32, &true);
 
     // Get user positions
     let user_positions = position_client.get_user_open_positions(&trader);
@@ -567,34 +575,17 @@ fn test_user_positions_after_close() {
         _token_admin,
         _admin,
         trader,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
 
     // Open multiple positions
-    let pos1 = position_client.open_position(
-        &trader,
-        &0u32,
-        &1_000_000_000u128,
-        &10u32,
-        &true,
-    );
+    let pos1 = position_client.open_position(&trader, &0u32, &1_000_000_000u128, &10u32, &true);
 
-    let pos2 = position_client.open_position(
-        &trader,
-        &1u32,
-        &2_000_000_000u128,
-        &10u32,
-        &false,
-    );
+    let pos2 = position_client.open_position(&trader, &1u32, &2_000_000_000u128, &10u32, &false);
 
-    let pos3 = position_client.open_position(
-        &trader,
-        &2u32,
-        &500_000_000u128,
-        &10u32,
-        &true,
-    );
+    let pos3 = position_client.open_position(&trader, &2u32, &500_000_000u128, &10u32, &true);
 
     // Verify all 3 positions are tracked
     let user_positions_before = position_client.get_user_open_positions(&trader);
@@ -632,6 +623,7 @@ fn test_multiple_users_positions() {
         token_admin,
         _admin,
         trader1,
+        liquidity_pool_id,
     ) = setup_test_environment(&env);
 
     let position_client = PositionManagerClient::new(&env, &position_manager_id);
@@ -641,30 +633,15 @@ fn test_multiple_users_positions() {
     token_admin.mint(&trader2, &10_000_000_000);
 
     // Trader 1 opens 2 positions
-    let trader1_pos1 = position_client.open_position(
-        &trader1,
-        &0u32,
-        &1_000_000_000u128,
-        &10u32,
-        &true,
-    );
+    let trader1_pos1 =
+        position_client.open_position(&trader1, &0u32, &1_000_000_000u128, &10u32, &true);
 
-    let trader1_pos2 = position_client.open_position(
-        &trader1,
-        &1u32,
-        &2_000_000_000u128,
-        &10u32,
-        &false,
-    );
+    let trader1_pos2 =
+        position_client.open_position(&trader1, &1u32, &2_000_000_000u128, &10u32, &false);
 
     // Trader 2 opens 1 position
-    let trader2_pos1 = position_client.open_position(
-        &trader2,
-        &2u32,
-        &500_000_000u128,
-        &10u32,
-        &true,
-    );
+    let trader2_pos1 =
+        position_client.open_position(&trader2, &2u32, &500_000_000u128, &10u32, &true);
 
     // Verify trader1 has 2 positions
     let trader1_positions = position_client.get_user_open_positions(&trader1);

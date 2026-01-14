@@ -196,6 +196,34 @@ const Vault = () => {
                       <span className="font-medium">${TOKEN_PRICE.toFixed(2)}</span>
                     </div>
                   </div>
+
+                  {/* Pool Utilization */}
+                  <div className="pt-2 border-t border-border">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Pool Utilization</span>
+                      <span className={`font-medium ${poolStats.utilization > 80 ? 'text-destructive' : poolStats.utilization > 60 ? 'text-yellow-500' : 'text-green-500'}`}>
+                        {poolStats.utilization.toFixed(2)}%
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-sm mt-2">
+                      <span className="text-muted-foreground">Reserved Liquidity</span>
+                      <span className="font-medium">
+                        {poolStats.reservedLiquidity.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2
+                        })} tokens
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-sm mt-2">
+                      <span className="text-muted-foreground">Available Liquidity</span>
+                      <span className="font-medium">
+                        {poolStats.availableLiquidity.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2
+                        })} tokens
+                      </span>
+                    </div>
+                  </div>
                 </>
               )}
             </CardContent>

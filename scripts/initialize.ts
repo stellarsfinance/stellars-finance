@@ -151,7 +151,39 @@ async function main() {
         return { signedTxXdr: tx.toXDR() };
       }
     });
-    console.log('   ✓ Oracle integrator address set\n');
+    console.log('   ✓ Oracle integrator address set');
+
+    // 2d. Set liquidity pool address in ConfigManager
+    console.log('   → Setting liquidity pool address in ConfigManager...');
+    const setLiquidityPoolTx = await configManagerClient.set_liquidity_pool({
+      admin: publicKey,
+      contract: contracts['liquidity-pool'],
+    });
+
+    await setLiquidityPoolTx.signAndSend({
+      signTransaction: async (xdr: string) => {
+        const tx = TransactionBuilder.fromXDR(xdr, networkConfig.networkPassphrase);
+        tx.sign(sourceKeypair);
+        return { signedTxXdr: tx.toXDR() };
+      }
+    });
+    console.log('   ✓ Liquidity pool address set');
+
+    // 2e. Set position manager address in ConfigManager
+    console.log('   → Setting position manager address in ConfigManager...');
+    const setPositionManagerTx = await configManagerClient.set_position_manager({
+      admin: publicKey,
+      contract: contracts['position-manager'],
+    });
+
+    await setPositionManagerTx.signAndSend({
+      signTransaction: async (xdr: string) => {
+        const tx = TransactionBuilder.fromXDR(xdr, networkConfig.networkPassphrase);
+        tx.sign(sourceKeypair);
+        return { signedTxXdr: tx.toXDR() };
+      }
+    });
+    console.log('   ✓ Position manager address set\n');
 
     // 3. Initialize OracleIntegrator
     console.log('3️⃣  Initializing OracleIntegrator...');
@@ -192,7 +224,23 @@ async function main() {
         return { signedTxXdr: tx.toXDR() };
       }
     });
-    console.log('   ✓ LiquidityPool initialized\n');
+    console.log('   ✓ LiquidityPool initialized');
+
+    // 4b. Authorize PositionManager to manage liquidity
+    console.log('   → Authorizing PositionManager to manage liquidity...');
+    const setPositionManagerAuthTx = await liquidityPoolClient.set_position_manager({
+      admin: publicKey,
+      position_manager: contracts['position-manager'],
+    });
+
+    await setPositionManagerAuthTx.signAndSend({
+      signTransaction: async (xdr: string) => {
+        const tx = TransactionBuilder.fromXDR(xdr, networkConfig.networkPassphrase);
+        tx.sign(sourceKeypair);
+        return { signedTxXdr: tx.toXDR() };
+      }
+    });
+    console.log('   ✓ PositionManager authorized to reserve/release liquidity\n');
 
     // 5. MarketManager - No initialization needed (uses create_market instead)
     console.log('5️⃣  MarketManager...');
