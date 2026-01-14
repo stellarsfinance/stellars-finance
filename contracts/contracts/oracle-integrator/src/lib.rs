@@ -24,12 +24,6 @@
 //!
 //! ## Supported Oracle Networks
 //!
-//! ### 1. Pyth Network (Primary)
-//! - **Priority**: Highest
-//! - **Features**: High-frequency updates, extensive asset coverage, confidence intervals
-//! - **Update Frequency**: Sub-second updates, 200+ assets
-//! - **Use Case**: Primary price source for all markets
-//!
 //! ### 2. DIA Oracle (Secondary)
 //! - **Priority**: Medium
 //! - **Features**: Transparent data sourcing, customizable feeds, historical data
@@ -128,15 +122,15 @@ use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Map, Strin
 #[cfg(not(test))]
 mod config_manager {
     soroban_sdk::contractimport!(
-        file = "../../../target/wasm32-unknown-unknown/release/config_manager.wasm"
+        file = "../../../target/wasm32v1-none/release/config_manager.wasm"
     );
 }
 
 #[contracttype]
 pub enum DataKey {
     ConfigManager,
-    TestMode,              // bool: test mode enabled/disabled
-    TestBasePrice(u32),    // i128: base price per market_id for simulation
+    TestMode,           // bool: test mode enabled/disabled
+    TestBasePrice(u32), // i128: base price per market_id for simulation
 }
 
 /// Get the ConfigManager address from storage
@@ -400,7 +394,7 @@ impl OracleIntegrator {
             // This requires DIA oracle WASM interface
             // For now, panic with clear error message
             panic!(
-                "DIA oracle integration not yet implemented - requires DIA contract interface for symbol: {}",
+                "DIA oracle integration not yet implemented - requires DIA contract interface for symbol: {:?}",
                 dia_symbol
             );
         }
@@ -408,7 +402,10 @@ impl OracleIntegrator {
         #[cfg(test)]
         {
             // Test stub - should not be called in test mode
-            panic!("fetch_dia_price should not be called in test builds - market_id: {}", market_id);
+            panic!(
+                "fetch_dia_price should not be called in test builds - market_id: {}",
+                market_id
+            );
         }
     }
 
@@ -434,7 +431,7 @@ impl OracleIntegrator {
             // This requires proper sep-40-oracle client setup
             // For now, panic with clear error message
             panic!(
-                "Reflector oracle integration not yet implemented - requires sep-40-oracle setup for symbol: {}",
+                "Reflector oracle integration not yet implemented - requires sep-40-oracle setup for symbol: {:?}",
                 reflector_symbol
             );
         }
@@ -442,7 +439,10 @@ impl OracleIntegrator {
         #[cfg(test)]
         {
             // Test stub - should not be called in test mode
-            panic!("fetch_reflector_price should not be called in test builds - market_id: {}", market_id);
+            panic!(
+                "fetch_reflector_price should not be called in test builds - market_id: {}",
+                market_id
+            );
         }
     }
 

@@ -190,9 +190,7 @@ fn test_stress_concurrent_operations_20_users() {
     assert_eq!(final_reserved, 0, "All liquidity should be released");
 }
 
-// TODO: Fix funding rate accumulation - currently cumulative funding stays at 0
 #[test]
-#[ignore]
 fn test_liquidation_and_trading_workflow() {
     let env = Env::default();
     let test_env = setup_focused_test(&env);

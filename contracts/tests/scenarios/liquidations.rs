@@ -2,10 +2,7 @@ use soroban_sdk::Env;
 
 use crate::common::{assertions::*, liquidity_pool, market_manager, position_manager, setup::*, time_helpers::*};
 
-// TODO: Fix funding rate accumulation - currently cumulative funding stays at 0
-// which means positions never become liquidatable through funding payments alone
 #[test]
-#[ignore]
 fn test_liquidation_with_funding_payments() {
     let env = Env::default();
     let test_env = setup_focused_test(&env);
@@ -103,9 +100,7 @@ fn test_cannot_liquidate_healthy_position() {
     position_client.liquidate_position(&keeper, &position_id);
 }
 
-// TODO: Fix funding rate accumulation - currently cumulative funding stays at 0
 #[test]
-#[ignore]
 fn test_multiple_concurrent_liquidations() {
     let env = Env::default();
     let test_env = setup_focused_test(&env);
@@ -167,9 +162,7 @@ fn test_multiple_concurrent_liquidations() {
     );
 }
 
-// TODO: Fix funding rate accumulation - currently cumulative funding stays at 0
 #[test]
-#[ignore]
 fn test_liquidation_releases_liquidity() {
     let env = Env::default();
     let test_env = setup_focused_test(&env);
@@ -227,9 +220,7 @@ fn test_liquidation_releases_liquidity() {
     );
 }
 
-// TODO: Fix funding rate accumulation - currently cumulative funding stays at 0
 #[test]
-#[ignore]
 fn test_liquidation_oi_tracking() {
     let env = Env::default();
     let test_env = setup_focused_test(&env);

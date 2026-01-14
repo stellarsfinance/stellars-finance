@@ -257,7 +257,7 @@ impl MarketManager {
             cumulative_funding_long: 0,
             cumulative_funding_short: 0,
             is_paused: false,
-            base_funding_rate: 100, // 0.01% per hour = 1 basis point
+            base_funding_rate: 100, // 1% per hour = 100 basis points
             max_funding_rate,
         };
 
@@ -284,6 +284,8 @@ impl MarketManager {
     /// Update the funding rate for a market.
     ///
     /// Called every 60 seconds by the keeper bot.
+    /// Calculates funding rate based on market imbalance and updates cumulative funding.
+    /// Funding rate is expressed in basis points per hour.
     ///
     /// # Arguments
     ///
@@ -342,14 +344,11 @@ impl MarketManager {
         }
 
         // Calculate funding payment for this period
-        // Payment is proportional to time elapsed
-        let hours_elapsed = time_elapsed / 3600; // seconds to hours
-        let remainder_seconds = time_elapsed % 3600;
-
-        // funding_amount = funding_rate * (time_elapsed_in_hours)
-        let funding_for_full_hours = funding_rate * (hours_elapsed as i128);
-        let funding_for_remainder = (funding_rate * (remainder_seconds as i128)) / 3600;
-        let total_funding = funding_for_full_hours + funding_for_remainder;
+        // funding_rate is in basis points per hour
+        // Store as (funding_rate * time_elapsed) without dividing by 3600
+        // This avoids integer division precision loss
+        // The division by 3600 will happen in PnL calculation
+        let total_funding = funding_rate * (time_elapsed as i128);
 
         // Update cumulative funding
         if funding_rate > 0 {

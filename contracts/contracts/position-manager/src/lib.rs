@@ -389,12 +389,25 @@ fn calculate_pnl(env: &Env, position: &Position, current_price: i128) -> i128 {
 
     let funding_payment = if position.is_long {
         // Longs pay based on long-side cumulative funding
+        // Note: cumulative funding is stored as (funding_rate_bps * seconds) to avoid precision loss
+        // Formula: (bps·seconds * size) / (seconds_per_hour * price_scaling)
         let funding_accrued = cumulative_funding_long - position.entry_funding_long;
-        (funding_accrued * size_i128) / 10_000_000 // Divide by 1e7
+        // To avoid overflow, we break down the calculation:
+        // Instead of (funding_accrued * size) / (3600 * 1e7)
+        // We do: (funding_accrued / 3600) * size / 1e7
+        // This divides first to keep intermediate values small
+        let funding_per_second = funding_accrued / 3600;
+        (funding_per_second * size_i128) / 10_000_000
     } else {
         // Shorts pay based on short-side cumulative funding
+        // Note: cumulative funding is stored as (funding_rate_bps * seconds) to avoid precision loss
         let funding_accrued = cumulative_funding_short - position.entry_funding_short;
-        (funding_accrued * size_i128) / 10_000_000 // Divide by 1e7
+        // To avoid overflow, we break down the calculation:
+        // Instead of (funding_accrued * size) / (3600 * 1e7)
+        // We do: (funding_accrued / 3600) * size / 1e7
+        // This divides first to keep intermediate values small
+        let funding_per_second = funding_accrued / 3600;
+        (funding_per_second * size_i128) / 10_000_000
     };
 
     // 3. Calculate Borrowing Fees
