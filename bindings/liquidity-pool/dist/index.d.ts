@@ -155,14 +155,16 @@ export interface Client {
      *
      * # Arguments
      *
+     * * `admin` - The administrator address (must authorize)
      * * `config_manager` - The Config Manager contract address
      * * `token` - The token contract address for this pool
      *
      * # Panics
      *
-     * Panics if the pool is already initialized
+     * Panics if the pool is already initialized or admin doesn't authorize
      */
-    initialize: ({ config_manager, token }: {
+    initialize: ({ admin, config_manager, token }: {
+        admin: string;
         config_manager: string;
         token: string;
     }, options?: {

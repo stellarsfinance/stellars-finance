@@ -669,20 +669,41 @@ impl PositionManager {
         );
 
         // Settle PnL with pool and withdraw collateral to trader
-        // MVP: PnL is always 0, so trader gets collateral back
-        // Future: Handle profits (pool pays trader) and losses (trader forfeits some/all collateral)
         let collateral_i128 = position.collateral as i128;
         let final_amount = collateral_i128 + pnl;
 
         log!(&env, "final", final_amount);
 
-        // Withdraw collateral from pool's position tracking and transfer to trader
-        pool_client.withdraw_position_collateral(
-            &env.current_contract_address(),
-            &position_id,
-            &trader,
-            &position.collateral,
-        );
+        // Withdraw collateral and settle PnL
+        if pnl >= 0 {
+            // Profit or break-even: return full collateral, then pay profit separately
+            pool_client.withdraw_position_collateral(
+                &env.current_contract_address(),
+                &position_id,
+                &trader,
+                &position.collateral,
+            );
+            if pnl > 0 {
+                pool_client.settle_trader_pnl(
+                    &env.current_contract_address(),
+                    &trader,
+                    &pnl,
+                );
+            }
+        } else {
+            // Loss: return reduced collateral (collateral + negative pnl)
+            let withdrawal_amount = if final_amount > 0 {
+                final_amount as u128
+            } else {
+                0u128
+            };
+            pool_client.withdraw_position_collateral(
+                &env.current_contract_address(),
+                &position_id,
+                &trader,
+                &withdrawal_amount,
+            );
+        }
 
         // Update open interest in MarketManager (decrease)
         let market_manager = get_market_manager(&env);
@@ -935,6 +956,25 @@ impl PositionManager {
 
             if new_collateral_i128 <= 0 {
                 panic!("Position underwater - use close or liquidate instead");
+            }
+
+            // Settle realized PnL with trader
+            if realized_pnl > 0 {
+                // Profit: pay trader from pool reserves
+                pool_client.settle_trader_pnl(
+                    &env.current_contract_address(),
+                    &trader,
+                    &realized_pnl,
+                );
+            } else if realized_pnl < 0 {
+                // Loss: withdraw the loss amount from position collateral back to pool
+                let loss_amount = (-realized_pnl) as u128;
+                pool_client.withdraw_position_collateral(
+                    &env.current_contract_address(),
+                    &position_id,
+                    &pool_address,
+                    &loss_amount,
+                );
             }
 
             position.collateral = new_collateral_i128 as u128;

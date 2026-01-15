@@ -605,6 +605,36 @@ impl LiquidityPool {
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&env.current_contract_address(), &trader, &(amount as i128));
     }
+
+    /// Settle trader PnL by transferring profit from pool reserves.
+    ///
+    /// # Arguments
+    ///
+    /// * `position_manager` - The Position Manager contract address
+    /// * `trader` - The trader's address
+    /// * `pnl` - The PnL amount (positive = profit to pay trader)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the authorized position manager
+    pub fn settle_trader_pnl(
+        env: Env,
+        position_manager: Address,
+        trader: Address,
+        pnl: i128,
+    ) {
+        require_position_manager(&env, &position_manager);
+
+        // Only pay out positive PnL (losses handled by reduced collateral withdrawal)
+        if pnl <= 0 {
+            return;
+        }
+
+        // Transfer profit from pool to trader
+        let token = get_token(&env);
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&env.current_contract_address(), &trader, &pnl);
+    }
 }
 
 #[cfg(test)]

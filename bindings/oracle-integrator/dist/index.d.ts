@@ -7,6 +7,15 @@ export * as rpc from '@stellar/stellar-sdk/rpc';
 export type DataKey = {
     tag: "ConfigManager";
     values: void;
+} | {
+    tag: "TestMode";
+    values: void;
+} | {
+    tag: "TestBasePrice";
+    values: readonly [u32];
+} | {
+    tag: "FixedPriceMode";
+    values: void;
 };
 export interface Client {
     /**
@@ -15,19 +24,19 @@ export interface Client {
      *
      * # Arguments
      *
-     * * `asset_id` - The asset identifier (e.g., "XLM", "BTC", "ETH")
+     * * `market_id` - The market identifier (0=XLM, 1=BTC, 2=ETH)
      *
      * # Returns
      *
-     * The aggregated (median) price with confidence indicator
+     * The aggregated (median) price
      *
-     * # MVP Implementation
+     * # Implementation
      *
-     * Returns a fixed mock price of 100_000_000 (representing $1.00 with 7 decimals).
-     * This ensures consistent pricing for MVP testing without price fluctuations.
+     * In test mode: Returns time-based simulated price
+     * In production mode: Fetches from DIA and Reflector, validates, returns median
      */
-    get_price: ({ asset_id }: {
-        asset_id: u32;
+    get_price: ({ market_id }: {
+        market_id: u32;
     }, options?: {
         /**
          * The fee to pay for the transaction. Default: BASE_FEE
@@ -52,6 +61,60 @@ export interface Client {
      */
     initialize: ({ config_manager }: {
         config_manager: string;
+    }, options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<null>>;
+    /**
+     * Construct and simulate a get_test_mode transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Check if test mode is enabled.
+     *
+     * # Returns
+     *
+     * True if test mode is enabled, false otherwise
+     */
+    get_test_mode: (options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<boolean>>;
+    /**
+     * Construct and simulate a set_test_mode transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Enable or disable test mode with base prices.
+     *
+     * # Arguments
+     *
+     * * `admin` - The administrator address (must match ConfigManager admin)
+     * * `enabled` - Whether to enable test mode
+     * * `base_prices` - Map of market_id to base price for simulation
+     *
+     * # Panics
+     *
+     * Panics if caller is not the admin
+     */
+    set_test_mode: ({ admin, enabled, base_prices }: {
+        admin: string;
+        enabled: boolean;
+        base_prices: Map<u32, i128>;
     }, options?: {
         /**
          * The fee to pay for the transaction. Default: BASE_FEE
@@ -106,14 +169,14 @@ export interface Client {
      *
      * # Arguments
      *
-     * * `asset_id` - The asset identifier
+     * * `market_id` - The market identifier
      *
      * # Returns
      *
      * Tuple of (price, timestamp)
      */
-    fetch_dia_price: ({ asset_id }: {
-        asset_id: u32;
+    fetch_dia_price: ({ market_id }: {
+        market_id: u32;
     }, options?: {
         /**
          * The fee to pay for the transaction. Default: BASE_FEE
@@ -134,13 +197,17 @@ export interface Client {
      *
      * # Arguments
      *
-     * * `prices` - Array of prices from different oracles
+     * * `price1` - Price from first oracle
+     * * `price2` - Price from second oracle
      *
      * # Returns
      *
-     * The median price
+     * The median price (average of 2 prices)
      */
-    calculate_median: (options?: {
+    calculate_median: ({ price1, price2 }: {
+        price1: i128;
+        price2: i128;
+    }, options?: {
         /**
          * The fee to pay for the transaction. Default: BASE_FEE
          */
@@ -231,6 +298,34 @@ export interface Client {
         simulate?: boolean;
     }) => Promise<AssembledTransaction<null>>;
     /**
+     * Construct and simulate a set_fixed_price_mode transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Enable or disable fixed price mode (no oscillation).
+     * When enabled, prices will remain at base price without time-based variation.
+     * Useful for testing funding rates in isolation.
+     *
+     * # Arguments
+     *
+     * * `admin` - The administrator address
+     * * `enabled` - Whether to enable fixed price mode
+     */
+    set_fixed_price_mode: ({ admin, enabled }: {
+        admin: string;
+        enabled: boolean;
+    }, options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<null>>;
+    /**
      * Construct and simulate a check_price_deviation transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
      * Check if price deviation between sources exceeds threshold.
      *
@@ -265,14 +360,14 @@ export interface Client {
      *
      * # Arguments
      *
-     * * `asset_id` - The asset identifier
+     * * `market_id` - The market identifier
      *
      * # Returns
      *
      * Tuple of (price, timestamp)
      */
-    fetch_reflector_price: ({ asset_id }: {
-        asset_id: u32;
+    fetch_reflector_price: ({ market_id }: {
+        market_id: u32;
     }, options?: {
         /**
          * The fee to pay for the transaction. Default: BASE_FEE
@@ -304,12 +399,15 @@ export declare class Client extends ContractClient {
     readonly fromJSON: {
         get_price: (json: string) => AssembledTransaction<bigint>;
         initialize: (json: string) => AssembledTransaction<null>;
+        get_test_mode: (json: string) => AssembledTransaction<boolean>;
+        set_test_mode: (json: string) => AssembledTransaction<null>;
         validate_price: (json: string) => AssembledTransaction<boolean>;
         fetch_dia_price: (json: string) => AssembledTransaction<readonly [bigint, bigint]>;
         calculate_median: (json: string) => AssembledTransaction<bigint>;
         fetch_pyth_price: (json: string) => AssembledTransaction<readonly [bigint, bigint, bigint]>;
         get_oracle_health: (json: string) => AssembledTransaction<readonly [boolean, boolean, boolean]>;
         update_cached_price: (json: string) => AssembledTransaction<null>;
+        set_fixed_price_mode: (json: string) => AssembledTransaction<null>;
         check_price_deviation: (json: string) => AssembledTransaction<boolean>;
         fetch_reflector_price: (json: string) => AssembledTransaction<readonly [bigint, bigint]>;
     };

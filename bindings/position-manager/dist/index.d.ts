@@ -19,8 +19,13 @@ export type DataKey = {
 };
 export interface Position {
     collateral: u128;
-    entry_price: u128;
+    entry_funding_long: i128;
+    entry_funding_short: i128;
+    entry_price: i128;
     is_long: boolean;
+    last_interaction: u64;
+    liquidation_price: i128;
+    market_id: u32;
     size: u128;
     trader: string;
 }
@@ -31,9 +36,11 @@ export interface Client {
      *
      * # Arguments
      *
+     * * `admin` - The administrator address (must authorize)
      * * `config_manager` - Address of the ConfigManager contract
      */
-    initialize: ({ config_manager }: {
+    initialize: ({ admin, config_manager }: {
+        admin: string;
         config_manager: string;
     }, options?: {
         /**
@@ -162,12 +169,13 @@ export interface Client {
      *
      * The realized PnL (positive for profit, negative for loss)
      *
-     * # MVP Implementation
+     * # Implementation
      *
-     * For MVP:
-     * - Returns collateral back to trader (no PnL since price doesn't change)
-     * - PnL is always 0
-     * - No fees applied
+     * - Gets current price from OracleIntegrator
+     * - Calculates comprehensive PnL (price PnL + funding payments + borrowing fees)
+     * - Settles PnL with LiquidityPool
+     * - Updates MarketManager open interest
+     * - Returns collateral ± PnL to trader
      * - Emits PositionClosed event
      */
     close_position: ({ trader, position_id }: {
@@ -197,12 +205,24 @@ export interface Client {
      * * `position_id` - The unique position identifier
      * * `collateral_to_remove` - Collateral to remove (0 if none)
      * * `size_to_reduce` - Position size to reduce (0 if none)
+     *
+     * # Implementation
+     *
+     * - Verifies trader owns the position
+     * - If reducing size, realizes proportional PnL
+     * - Releases corresponding reserved liquidity
+     * - Updates MarketManager open interest
+     * - If removing collateral, verifies position remains sufficiently collateralized
+     * - Transfers collateral to trader if removed
+     * - Recalculates liquidation price
+     * - Updates last_interaction timestamp
+     * - Emits PositionModified event
      */
     decrease_position: ({ trader, position_id, collateral_to_remove, size_to_reduce }: {
         trader: string;
         position_id: u64;
-        collateral_to_remove: i128;
-        size_to_reduce: i128;
+        collateral_to_remove: u128;
+        size_to_reduce: u128;
     }, options?: {
         /**
          * The fee to pay for the transaction. Default: BASE_FEE
@@ -227,12 +247,24 @@ export interface Client {
      * * `position_id` - The unique position identifier
      * * `additional_collateral` - Additional collateral to add (0 if none)
      * * `additional_size` - Additional position size (0 if none)
+     *
+     * # Implementation
+     *
+     * - Verifies trader owns the position
+     * - Checks leverage limits with new total size
+     * - Checks market open interest limits for additional size
+     * - Transfers additional collateral if provided
+     * - Updates position size and recalculates average entry price
+     * - Recalculates liquidation price
+     * - Updates funding rate snapshots and last_interaction timestamp
+     * - Updates MarketManager open interest
+     * - Emits PositionModified event
      */
     increase_position: ({ trader, position_id, additional_collateral, additional_size }: {
         trader: string;
         position_id: u64;
-        additional_collateral: i128;
-        additional_size: i128;
+        additional_collateral: u128;
+        additional_size: u128;
     }, options?: {
         /**
          * The fee to pay for the transaction. Default: BASE_FEE
@@ -259,6 +291,19 @@ export interface Client {
      * # Returns
      *
      * The liquidation reward paid to the keeper
+     *
+     * # Implementation
+     *
+     * - Gets current price from OracleIntegrator
+     * - Calculates comprehensive PnL including all fees
+     * - Verifies position is liquidatable (underwater or below maintenance margin)
+     * - Calculates liquidation fees:
+     * - 0.3% of position size goes to keeper as reward
+     * - 0.2% of position size goes to liquidity pool
+     * - Settles with LiquidityPool (collateral minus losses and fees)
+     * - Updates MarketManager open interest
+     * - Deletes position from storage
+     * - Emits PositionLiquidated event
      */
     liquidate_position: ({ keeper, position_id }: {
         keeper: string;
@@ -276,7 +321,7 @@ export interface Client {
          * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
          */
         simulate?: boolean;
-    }) => Promise<AssembledTransaction<i128>>;
+    }) => Promise<AssembledTransaction<u128>>;
     /**
      * Construct and simulate a get_user_open_positions transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
      * Get all open position IDs for a specific trader.

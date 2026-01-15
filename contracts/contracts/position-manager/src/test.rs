@@ -2,7 +2,7 @@
 
 use super::*;
 use soroban_sdk::log;
-use soroban_sdk::{testutils::Address as _, token, Address, Env};
+use soroban_sdk::{testutils::Address as _, token, Address, Env, Map};
 
 // Import the actual contracts for integration testing
 use crate::config_manager;
@@ -53,6 +53,13 @@ fn setup_test_environment<'a>(
     let oracle_id = env.register(oracle_integrator::WASM, ());
     let oracle_client = oracle_integrator::Client::new(env, &oracle_id);
     oracle_client.initialize(&config_manager_id);
+
+    // Enable test mode with base prices for simulated oracle
+    let mut base_prices = Map::new(env);
+    base_prices.set(0u32, 100_000_000i128);  // XLM: $1.00
+    base_prices.set(1u32, 50_000_000_000i128); // BTC: $50,000
+    base_prices.set(2u32, 3_000_000_000i128);  // ETH: $3,000
+    oracle_client.set_test_mode(&admin, &true, &base_prices);
 
     // Deploy MarketManager
     let market_manager_id = env.register(market_manager::WASM, ());

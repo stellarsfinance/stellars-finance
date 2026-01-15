@@ -20,6 +20,12 @@ export type DataKey = {
     tag: "OracleIntegratorContract";
     values: void;
 } | {
+    tag: "DiaOracleContract";
+    values: void;
+} | {
+    tag: "ReflectorOracleContract";
+    values: void;
+} | {
     tag: "TokenContract";
     values: void;
 } | {
@@ -170,6 +176,28 @@ export interface Client {
          */
         simulate?: boolean;
     }) => Promise<AssembledTransaction<null>>;
+    /**
+     * Construct and simulate a dia_oracle transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Get the DIA Oracle contract address.
+     *
+     * # Returns
+     *
+     * The DIA Oracle contract address
+     */
+    dia_oracle: (options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<string>>;
     /**
      * Construct and simulate a get_config transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
      * Get a configuration parameter using a Symbol key.
@@ -391,6 +419,36 @@ export interface Client {
         simulate?: boolean;
     }) => Promise<AssembledTransaction<string>>;
     /**
+     * Construct and simulate a set_dia_oracle transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Set the DIA Oracle contract address.
+     *
+     * # Arguments
+     *
+     * * `admin` - The administrator address
+     * * `contract` - The DIA Oracle contract address
+     *
+     * # Panics
+     *
+     * Panics if caller is not the admin
+     */
+    set_dia_oracle: ({ admin, contract }: {
+        admin: string;
+        contract: string;
+    }, options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<null>>;
+    /**
      * Construct and simulate a get_time_config transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
      * Get a time-based configuration parameter using a Symbol key.
      *
@@ -449,6 +507,28 @@ export interface Client {
      * The Position Manager contract address
      */
     position_manager: (options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<string>>;
+    /**
+     * Construct and simulate a reflector_oracle transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Get the Reflector Oracle contract address.
+     *
+     * # Returns
+     *
+     * The Reflector Oracle contract address
+     */
+    reflector_oracle: (options?: {
         /**
          * The fee to pay for the transaction. Default: BASE_FEE
          */
@@ -624,6 +704,36 @@ export interface Client {
      * Panics if caller is not the admin
      */
     set_position_manager: ({ admin, contract }: {
+        admin: string;
+        contract: string;
+    }, options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<null>>;
+    /**
+     * Construct and simulate a set_reflector_oracle transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Set the Reflector Oracle contract address.
+     *
+     * # Arguments
+     *
+     * * `admin` - The administrator address
+     * * `contract` - The Reflector Oracle contract address
+     *
+     * # Panics
+     *
+     * Panics if caller is not the admin
+     */
+    set_reflector_oracle: ({ admin, contract }: {
         admin: string;
         contract: string;
     }, options?: {
@@ -859,6 +969,7 @@ export declare class Client extends ContractClient {
         token: (json: string) => AssembledTransaction<string>;
         set_admin: (json: string) => AssembledTransaction<null>;
         set_token: (json: string) => AssembledTransaction<null>;
+        dia_oracle: (json: string) => AssembledTransaction<string>;
         get_config: (json: string) => AssembledTransaction<bigint>;
         initialize: (json: string) => AssembledTransaction<null>;
         set_config: (json: string) => AssembledTransaction<null>;
@@ -868,9 +979,11 @@ export declare class Client extends ContractClient {
         taker_fee_bps: (json: string) => AssembledTransaction<bigint>;
         liquidity_pool: (json: string) => AssembledTransaction<string>;
         market_manager: (json: string) => AssembledTransaction<string>;
+        set_dia_oracle: (json: string) => AssembledTransaction<null>;
         get_time_config: (json: string) => AssembledTransaction<bigint>;
         funding_interval: (json: string) => AssembledTransaction<bigint>;
         position_manager: (json: string) => AssembledTransaction<string>;
+        reflector_oracle: (json: string) => AssembledTransaction<string>;
         min_position_size: (json: string) => AssembledTransaction<bigint>;
         oracle_integrator: (json: string) => AssembledTransaction<string>;
         maintenance_margin: (json: string) => AssembledTransaction<bigint>;
@@ -878,6 +991,7 @@ export declare class Client extends ContractClient {
         set_market_manager: (json: string) => AssembledTransaction<null>;
         liquidation_fee_bps: (json: string) => AssembledTransaction<bigint>;
         set_position_manager: (json: string) => AssembledTransaction<null>;
+        set_reflector_oracle: (json: string) => AssembledTransaction<null>;
         liquidation_threshold: (json: string) => AssembledTransaction<bigint>;
         max_utilization_ratio: (json: string) => AssembledTransaction<bigint>;
         set_oracle_integrator: (json: string) => AssembledTransaction<null>;
