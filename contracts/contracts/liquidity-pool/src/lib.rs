@@ -205,16 +205,20 @@ impl LiquidityPool {
     ///
     /// # Arguments
     ///
+    /// * `admin` - The administrator address (must authorize)
     /// * `config_manager` - The Config Manager contract address
     /// * `token` - The token contract address for this pool
     ///
     /// # Panics
     ///
-    /// Panics if the pool is already initialized
-    pub fn initialize(env: Env, config_manager: Address, token: Address) {
+    /// Panics if the pool is already initialized or admin doesn't authorize
+    pub fn initialize(env: Env, admin: Address, config_manager: Address, token: Address) {
         if env.storage().instance().has(&DataKey::ConfigManager) {
             panic!("already initialized");
         }
+
+        // Require admin to authorize initialization
+        admin.require_auth();
 
         put_config_manager(&env, &config_manager);
         put_token(&env, token);
@@ -470,17 +474,15 @@ impl LiquidityPool {
     ///
     /// Panics if caller is not the authorized position manager
     pub fn release_liquidity(env: Env, position_manager: Address, position_id: u64, size: u128) {
-        // require_position_manager(&env, &position_manager);
+        require_position_manager(&env, &position_manager);
 
         let reserved = get_reserved_liquidity(&env);
-        log!(&env, "aa", reserved, size);
         if size > reserved {
             panic!("cannot release more than reserved");
         }
 
         let new_reserved = reserved - size;
         put_reserved_liquidity(&env, new_reserved);
-        // Note: position collateral tracking is deleted in withdraw_position_collateral, not here
     }
 
     /// Get the total reserved liquidity.

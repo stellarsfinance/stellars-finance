@@ -94,12 +94,12 @@ pub fn setup_test_environment<'a>(
     // Deploy LiquidityPool
     let liquidity_pool_id = env.register(liquidity_pool::WASM, ());
     let liquidity_client = liquidity_pool::Client::new(env, &liquidity_pool_id);
-    liquidity_client.initialize(&config_manager_id, &token_client.address);
+    liquidity_client.initialize(&admin, &config_manager_id, &token_client.address);
 
     // Deploy PositionManager
     let position_manager_id = env.register(position_manager::WASM, ());
     let position_client = position_manager::Client::new(env, &position_manager_id);
-    position_client.initialize(&config_manager_id);
+    position_client.initialize(&admin, &config_manager_id);
 
     // Configure ConfigManager with contract addresses
     config_client.set_oracle_integrator(&admin, &oracle_id);

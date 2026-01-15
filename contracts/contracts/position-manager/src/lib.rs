@@ -433,8 +433,17 @@ impl PositionManager {
     ///
     /// # Arguments
     ///
+    /// * `admin` - The administrator address (must authorize)
     /// * `config_manager` - Address of the ConfigManager contract
-    pub fn initialize(env: Env, config_manager: Address) {
+    pub fn initialize(env: Env, admin: Address, config_manager: Address) {
+        // Prevent reinitialization
+        if env.storage().instance().has(&DataKey::ConfigManager) {
+            panic!("already initialized");
+        }
+
+        // Require admin to authorize initialization
+        admin.require_auth();
+
         // Store the ConfigManager address
         env.storage()
             .instance()

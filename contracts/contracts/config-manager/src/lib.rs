@@ -229,6 +229,9 @@ impl ConfigManager {
             panic!("already initialized");
         }
 
+        // Require the admin to authorize this initialization
+        admin.require_auth();
+
         // Set admin
         put_admin(&env, &admin);
 

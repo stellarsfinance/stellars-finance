@@ -298,6 +298,11 @@ impl MarketManager {
 
         let mut market = get_market(&env, market_id);
 
+        // Check if market is paused - funding updates should be suspended
+        if market.is_paused {
+            panic!("cannot update funding rate for paused market");
+        }
+
         // Verify funding interval has passed (60s from ConfigManager)
         let config_manager = get_config_manager(&env);
         let config_client = config_manager::Client::new(&env, &config_manager);

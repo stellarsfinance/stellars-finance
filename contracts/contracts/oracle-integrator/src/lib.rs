@@ -122,7 +122,7 @@ use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Map, Strin
 #[cfg(not(test))]
 mod config_manager {
     soroban_sdk::contractimport!(
-        file = "../../../target/wasm32v1-none/release/config_manager.wasm"
+        file = "../../target/wasm32v1-none/release/config_manager.wasm"
     );
 }
 
@@ -252,6 +252,11 @@ impl OracleIntegrator {
     ///
     /// * `config_manager` - Address of the ConfigManager contract
     pub fn initialize(env: Env, config_manager: Address) {
+        // Prevent reinitialization
+        if env.storage().instance().has(&DataKey::ConfigManager) {
+            panic!("already initialized");
+        }
+
         // Store the ConfigManager address
         env.storage()
             .instance()

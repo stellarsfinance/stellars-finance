@@ -62,12 +62,12 @@ fn setup_test_environment<'a>(
     // Deploy LiquidityPool
     let liquidity_pool_id = env.register(liquidity_pool::WASM, ());
     let liquidity_client = liquidity_pool::Client::new(env, &liquidity_pool_id);
-    liquidity_client.initialize(&config_manager_id, &token_client.address);
+    liquidity_client.initialize(&admin, &config_manager_id, &token_client.address);
 
     // Deploy PositionManager
     let position_manager_id = env.register(PositionManager, ());
     let position_client = PositionManagerClient::new(env, &position_manager_id);
-    position_client.initialize(&config_manager_id);
+    position_client.initialize(&admin, &config_manager_id);
 
     // Configure ConfigManager with contract addresses
     config_client.set_oracle_integrator(&admin, &oracle_id);
@@ -112,13 +112,14 @@ fn test_contract_initialization() {
     let env = Env::default();
     env.mock_all_auths();
 
+    let admin = Address::generate(&env);
     let config_manager = Address::generate(&env);
 
     let contract_id = env.register(PositionManager, ());
     let client = PositionManagerClient::new(&env, &contract_id);
 
     // Initialize the contract
-    client.initialize(&config_manager);
+    client.initialize(&admin, &config_manager);
 
     // Contract successfully initialized
 }
