@@ -86,6 +86,13 @@ pub fn setup_test_environment<'a>(
     let oracle_client = oracle_integrator::Client::new(env, &oracle_id);
     oracle_client.initialize(&config_manager_id);
 
+    // Enable test mode with simulated prices
+    let mut base_prices = soroban_sdk::Map::new(env);
+    base_prices.set(0u32, 100_000_000i128);        // XLM: $0.10
+    base_prices.set(1u32, 50_000_000_000_000i128); // BTC: $50,000
+    base_prices.set(2u32, 3_000_000_000_000i128);  // ETH: $3,000
+    oracle_client.set_test_mode(&admin, &true, &base_prices);
+
     // Deploy MarketManager
     let market_manager_id = env.register(market_manager::WASM, ());
     let market_client = market_manager::Client::new(env, &market_manager_id);

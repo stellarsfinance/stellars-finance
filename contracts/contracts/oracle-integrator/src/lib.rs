@@ -131,6 +131,7 @@ pub enum DataKey {
     ConfigManager,
     TestMode,           // bool: test mode enabled/disabled
     TestBasePrice(u32), // i128: base price per market_id for simulation
+    FixedPriceMode,     // bool: if true, return base price without oscillation
 }
 
 /// Get the ConfigManager address from storage
@@ -179,6 +180,17 @@ fn get_simulated_price(env: &Env, market_id: u32) -> (i128, u64) {
         .unwrap_or(100_000_000);
 
     let timestamp = env.ledger().timestamp();
+
+    // Check if fixed price mode is enabled (no oscillation)
+    let fixed_price_mode: bool = env
+        .storage()
+        .instance()
+        .get(&DataKey::FixedPriceMode)
+        .unwrap_or(false);
+
+    if fixed_price_mode {
+        return (base_price, timestamp);
+    }
 
     // Create predictable price oscillation: ±10% per hour
     let time_in_hour = (timestamp % 3600) as i128;
@@ -309,6 +321,21 @@ impl OracleIntegrator {
             .instance()
             .get(&DataKey::TestMode)
             .unwrap_or(false)
+    }
+
+    /// Enable or disable fixed price mode (no oscillation).
+    /// When enabled, prices will remain at base price without time-based variation.
+    /// Useful for testing funding rates in isolation.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `enabled` - Whether to enable fixed price mode
+    pub fn set_fixed_price_mode(env: Env, admin: Address, enabled: bool) {
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::FixedPriceMode, &enabled);
     }
 
     /// Get the current price for a specific asset from all oracle sources.

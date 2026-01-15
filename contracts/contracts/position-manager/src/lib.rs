@@ -399,14 +399,12 @@ fn calculate_pnl(env: &Env, position: &Position, current_price: i128) -> i128 {
         let funding_per_second = funding_accrued / 3600;
         (funding_per_second * size_i128) / 10_000_000
     } else {
-        // Shorts pay based on short-side cumulative funding
-        // Note: cumulative funding is stored as (funding_rate_bps * seconds) to avoid precision loss
-        let funding_accrued = cumulative_funding_short - position.entry_funding_short;
-        // To avoid overflow, we break down the calculation:
-        // Instead of (funding_accrued * size) / (3600 * 1e7)
-        // We do: (funding_accrued / 3600) * size / 1e7
-        // This divides first to keep intermediate values small
-        let funding_per_second = funding_accrued / 3600;
+        // Shorts: pay when cumulative_funding_short increases, receive when cumulative_funding_long increases
+        // Net funding cost = what they paid - what they received
+        let funding_received = cumulative_funding_long - position.entry_funding_long;
+        let funding_paid = cumulative_funding_short - position.entry_funding_short;
+        let net_funding = funding_paid - funding_received;
+        let funding_per_second = net_funding / 3600;
         (funding_per_second * size_i128) / 10_000_000
     };
 
@@ -1108,49 +1106,35 @@ impl PositionManager {
 
         let mut keeper_payment = 0u128;
 
-        if remaining_value > 0 {
-            // Position has some remaining value
-            let available = remaining_value as u128;
+        // Pay keeper from actual collateral (not remaining_value)
+        // The collateral physically exists in the pool; PnL is an accounting calculation
+        if keeper_reward > 0 && position.collateral > 0 {
+            let keeper_reward_u128 = keeper_reward as u128;
+            keeper_payment = if keeper_reward_u128 > position.collateral {
+                position.collateral // Pay whatever collateral is available
+            } else {
+                keeper_reward_u128 // Pay full reward
+            };
 
-            // Pay keeper first (up to their reward amount)
-            if keeper_reward > 0 {
-                let keeper_reward_u128 = keeper_reward as u128;
-                keeper_payment = if keeper_reward_u128 > available {
-                    available
-                } else {
-                    keeper_reward_u128
-                };
-
-                if keeper_payment > 0 {
-                    pool_client.withdraw_position_collateral(
-                        &env.current_contract_address(),
-                        &position_id,
-                        &keeper,
-                        &keeper_payment,
-                    );
-                }
-            }
-
-            // Remaining collateral stays with pool (covers losses and pool fee)
-            let remaining_collateral = position.collateral - keeper_payment;
-            if remaining_collateral > 0 {
+            if keeper_payment > 0 {
                 pool_client.withdraw_position_collateral(
                     &env.current_contract_address(),
                     &position_id,
-                    &pool_address,
-                    &remaining_collateral,
+                    &keeper,
+                    &keeper_payment,
                 );
             }
-        } else {
-            // Position completely underwater - all collateral goes to pool to cover losses
+        }
+
+        // Remaining collateral goes to pool (covers losses and pool fee)
+        let remaining_collateral = position.collateral - keeper_payment;
+        if remaining_collateral > 0 {
             pool_client.withdraw_position_collateral(
                 &env.current_contract_address(),
                 &position_id,
                 &pool_address,
-                &position.collateral,
+                &remaining_collateral,
             );
-            // Keeper gets no reward in this case (position too underwater)
-            keeper_payment = 0;
         }
 
         // Update open interest in MarketManager (decrease)

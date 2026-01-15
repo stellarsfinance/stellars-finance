@@ -32,10 +32,8 @@ fn test_liquidation_with_funding_payments() {
     let initial_reserved = pool_client.get_reserved_liquidity();
 
     // Simulate time passing: 10000 funding intervals to accumulate enough funding fees
-    for _ in 0..10000 {
-        advance_funding_interval(&env);
-        market_client.update_funding_rate(&test_env.admin, &market_id);
-    }
+    advance_funding_intervals(&env, 10000);
+    market_client.update_funding_rate(&test_env.admin, &market_id);
 
     // Get position state before liquidation
     let position_before = position_client.get_position(&position_id);
@@ -126,10 +124,8 @@ fn test_multiple_concurrent_liquidations() {
     position_client.open_position(&extra_trader, &market_id, &collateral, &leverage, &true);
 
     // Simulate time to make positions liquidatable
-    for _ in 0..10000 {
-        advance_funding_interval(&env);
-        market_client.update_funding_rate(&test_env.admin, &market_id);
-    }
+    advance_funding_intervals(&env, 10000);
+    market_client.update_funding_rate(&test_env.admin, &market_id);
 
     // Keeper liquidates all 4 positions
     let keeper = test_env.lps.get(0).unwrap();
@@ -196,10 +192,8 @@ fn test_liquidation_releases_liquidity() {
     let available_before = pool_client.get_available_liquidity();
 
     // Simulate time to make liquidatable
-    for _ in 0..10000 {
-        advance_funding_interval(&env);
-        market_client.update_funding_rate(&test_env.admin, &market_id);
-    }
+    advance_funding_intervals(&env, 10000);
+    market_client.update_funding_rate(&test_env.admin, &market_id);
 
     // Liquidate
     position_client.liquidate_position(&keeper, &position_id);
@@ -232,7 +226,7 @@ fn test_liquidation_oi_tracking() {
     let collateral = 1_000_000_000u128;
     let leverage = 20u32;
 
-    // Open 3 long positions
+    // Open 3 long positions (will pay funding and become liquidatable)
     let mut long_ids = soroban_sdk::Vec::new(&env);
     for i in 0..3 {
         let trader = test_env.traders.get(i).unwrap();
@@ -241,13 +235,10 @@ fn test_liquidation_oi_tracking() {
         long_ids.push_back(pos_id);
     }
 
-    // Open 2 short positions
-    let mut short_ids = soroban_sdk::Vec::new(&env);
+    // Open 2 short positions (will receive funding - not liquidatable in this setup)
     for i in 3..5 {
         let trader = test_env.traders.get(i).unwrap();
-        let pos_id =
-            position_client.open_position(&trader, &market_id, &collateral, &leverage, &false);
-        short_ids.push_back(pos_id);
+        position_client.open_position(&trader, &market_id, &collateral, &leverage, &false);
     }
 
     let initial_long_oi = collateral * (leverage as u128) * 3;
@@ -256,30 +247,28 @@ fn test_liquidation_oi_tracking() {
     // Verify initial OI
     assert_market_oi(&env, &market_client, market_id, initial_long_oi, initial_short_oi);
 
-    // Make positions liquidatable
-    for _ in 0..60 {
-        advance_funding_interval(&env);
-        market_client.update_funding_rate(&test_env.admin, &market_id);
-    }
+    // Make long positions liquidatable (longs pay funding to shorts in this imbalanced market)
+    advance_funding_intervals(&env, 10000);
+    market_client.update_funding_rate(&test_env.admin, &market_id);
 
-    // Liquidate one long position
+    // Liquidate first long position
     let keeper = test_env.lps.get(0).unwrap();
     position_client.liquidate_position(&keeper, &long_ids.get(0).unwrap());
 
     // Verify long OI decreased
-    let expected_long_oi = collateral * (leverage as u128) * 2;
+    let expected_long_oi_after_first = collateral * (leverage as u128) * 2;
     assert_market_oi(
         &env,
         &market_client,
         market_id,
-        expected_long_oi,
+        expected_long_oi_after_first,
         initial_short_oi,
     );
 
-    // Liquidate one short position
-    position_client.liquidate_position(&keeper, &short_ids.get(0).unwrap());
+    // Liquidate second long position
+    position_client.liquidate_position(&keeper, &long_ids.get(1).unwrap());
 
-    // Verify short OI decreased
-    let expected_short_oi = collateral * (leverage as u128);
-    assert_market_oi(&env, &market_client, market_id, expected_long_oi, expected_short_oi);
+    // Verify long OI decreased again
+    let expected_long_oi_after_second = collateral * (leverage as u128);
+    assert_market_oi(&env, &market_client, market_id, expected_long_oi_after_second, initial_short_oi);
 }

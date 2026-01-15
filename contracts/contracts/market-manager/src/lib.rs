@@ -341,6 +341,13 @@ impl MarketManager {
         // funding_rate = base_rate * imbalance_squared / 10000
         let mut funding_rate = (market.base_funding_rate * imbalance_squared) / 10000;
 
+        // Restore sign: squaring loses direction, so apply sign based on original imbalance
+        // Positive imbalance (longs > shorts) = positive rate (longs pay)
+        // Negative imbalance (shorts > longs) = negative rate (shorts pay)
+        if imbalance_ratio_bps < 0 {
+            funding_rate = -funding_rate;
+        }
+
         // Cap at max funding rate
         if funding_rate > market.max_funding_rate {
             funding_rate = market.max_funding_rate;
