@@ -149,13 +149,95 @@ pub struct PositionLiquidatedEvent {
     pub liquidation_reward: u128,
 }
 
+// ============================================================================
+// ORDER TYPES - Limit, Stop-Loss, Take-Profit
+// ============================================================================
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum OrderType {
+    Limit,      // Open new position when price reaches target
+    StopLoss,   // Close existing position to limit losses
+    TakeProfit, // Close existing position to secure gains
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum OrderCancelReason {
+    UserCancelled,
+    PositionClosed,
+    PositionLiquidated,
+    Expired,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Order {
+    pub order_id: u64,
+    pub order_type: OrderType,
+    pub trader: Address,
+    pub market_id: u32,
+    pub position_id: u64,       // 0 for Limit orders, position_id for SL/TP
+    pub trigger_price: i128,    // Price that triggers execution (1e7 scaled)
+    pub acceptable_price: i128, // Slippage protection (0 = no limit)
+    pub collateral: u128,       // For Limit orders only
+    pub size: u128,             // Position size (Limit) or size to close (SL/TP)
+    pub leverage: u32,          // For Limit orders only
+    pub is_long: bool,
+    pub close_percentage: u32,  // For SL/TP: 10000 = 100%
+    pub execution_fee: u128,    // Fee paid to keeper
+    pub expiration: u64,        // 0 = no expiry
+    pub created_at: u64,
+}
+
+// Order Events
+#[contractevent]
+pub struct OrderCreatedEvent {
+    pub order_id: u64,
+    pub order_type: OrderType,
+    pub trader: Address,
+    pub market_id: u32,
+    pub position_id: u64,
+    pub trigger_price: i128,
+    pub size: u128,
+    pub is_long: bool,
+    pub expiration: u64,
+}
+
+#[contractevent]
+pub struct OrderExecutedEvent {
+    pub order_id: u64,
+    pub order_type: OrderType,
+    pub trader: Address,
+    pub keeper: Address,
+    pub execution_price: i128,
+    pub position_id: u64,
+    pub pnl: i128,
+    pub execution_fee: u128,
+}
+
+#[contractevent]
+pub struct OrderCancelledEvent {
+    pub order_id: u64,
+    pub order_type: OrderType,
+    pub trader: Address,
+    pub reason: OrderCancelReason,
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
     Position(u64),
     NextPositionId,
     ConfigManager,
-    UserPositions(Address), // Maps user address to Vec<u64> of their open position IDs
+    UserPositions(Address),      // Maps user address to Vec<u64> of their open position IDs
+    // Order-related keys
+    Order(u64),                  // Individual order storage
+    NextOrderId,                 // Auto-increment counter for order IDs
+    UserOrders(Address),         // User -> Vec<order_ids>
+    PositionOrders(u64),         // Position -> Vec<attached SL/TP order_ids>
+    ActiveOrdersByMarket(u32),   // Market -> Vec<order_ids> for keeper queries
+    MinExecutionFee,             // Minimum fee for keepers
 }
 
 // Helper functions for storage
@@ -268,6 +350,659 @@ fn remove_user_position(env: &Env, trader: &Address, position_id: u64) {
     env.storage()
         .persistent()
         .set(&DataKey::UserPositions(trader.clone()), &new_positions);
+}
+
+// ============================================================================
+// ORDER STORAGE HELPERS
+// ============================================================================
+
+const ORDER_TTL_LEDGERS: u32 = 100_000; // ~14 days, same as positions
+
+/// Get an order from storage
+fn get_order_from_storage(env: &Env, order_id: u64) -> Order {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Order(order_id))
+        .expect("Order not found")
+}
+
+/// Check if an order exists
+fn order_exists(env: &Env, order_id: u64) -> bool {
+    env.storage()
+        .persistent()
+        .has(&DataKey::Order(order_id))
+}
+
+/// Store an order in persistent storage with TTL extension
+fn set_order(env: &Env, order_id: u64, order: &Order) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Order(order_id), order);
+    env.storage()
+        .persistent()
+        .extend_ttl(&DataKey::Order(order_id), ORDER_TTL_LEDGERS, ORDER_TTL_LEDGERS);
+}
+
+/// Delete an order from storage
+fn remove_order(env: &Env, order_id: u64) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::Order(order_id));
+}
+
+/// Get the next order ID
+fn get_next_order_id(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::NextOrderId)
+        .unwrap_or(0)
+}
+
+/// Increment and return the next order ID
+fn increment_order_id(env: &Env) -> u64 {
+    let next_id = get_next_order_id(env);
+    env.storage()
+        .instance()
+        .set(&DataKey::NextOrderId, &(next_id + 1));
+    next_id
+}
+
+/// Get all order IDs for a user
+fn get_user_orders_list(env: &Env, trader: &Address) -> soroban_sdk::Vec<u64> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::UserOrders(trader.clone()))
+        .unwrap_or(soroban_sdk::Vec::new(env))
+}
+
+/// Add an order ID to a user's list of orders
+fn add_user_order(env: &Env, trader: &Address, order_id: u64) {
+    let mut orders = get_user_orders_list(env, trader);
+    orders.push_back(order_id);
+    env.storage()
+        .persistent()
+        .set(&DataKey::UserOrders(trader.clone()), &orders);
+}
+
+/// Remove an order ID from a user's list of orders
+fn remove_user_order(env: &Env, trader: &Address, order_id: u64) {
+    let orders = get_user_orders_list(env, trader);
+    let mut new_orders = soroban_sdk::Vec::new(env);
+    for i in 0..orders.len() {
+        let id = orders.get(i).unwrap();
+        if id != order_id {
+            new_orders.push_back(id);
+        }
+    }
+    env.storage()
+        .persistent()
+        .set(&DataKey::UserOrders(trader.clone()), &new_orders);
+}
+
+/// Get all order IDs attached to a position (SL/TP orders)
+fn get_position_orders_list(env: &Env, position_id: u64) -> soroban_sdk::Vec<u64> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::PositionOrders(position_id))
+        .unwrap_or(soroban_sdk::Vec::new(env))
+}
+
+/// Add an order ID to a position's attached orders
+fn add_position_order(env: &Env, position_id: u64, order_id: u64) {
+    let mut orders = get_position_orders_list(env, position_id);
+    orders.push_back(order_id);
+    env.storage()
+        .persistent()
+        .set(&DataKey::PositionOrders(position_id), &orders);
+}
+
+/// Remove an order ID from a position's attached orders
+fn remove_position_order(env: &Env, position_id: u64, order_id: u64) {
+    let orders = get_position_orders_list(env, position_id);
+    let mut new_orders = soroban_sdk::Vec::new(env);
+    for i in 0..orders.len() {
+        let id = orders.get(i).unwrap();
+        if id != order_id {
+            new_orders.push_back(id);
+        }
+    }
+    env.storage()
+        .persistent()
+        .set(&DataKey::PositionOrders(position_id), &new_orders);
+}
+
+/// Clear all orders attached to a position
+fn clear_position_orders(env: &Env, position_id: u64) {
+    env.storage()
+        .persistent()
+        .remove(&DataKey::PositionOrders(position_id));
+}
+
+/// Get all active order IDs for a market (for keeper queries)
+fn get_market_orders_list(env: &Env, market_id: u32) -> soroban_sdk::Vec<u64> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::ActiveOrdersByMarket(market_id))
+        .unwrap_or(soroban_sdk::Vec::new(env))
+}
+
+/// Add an order ID to a market's active orders
+fn add_market_order(env: &Env, market_id: u32, order_id: u64) {
+    let mut orders = get_market_orders_list(env, market_id);
+    orders.push_back(order_id);
+    env.storage()
+        .persistent()
+        .set(&DataKey::ActiveOrdersByMarket(market_id), &orders);
+}
+
+/// Remove an order ID from a market's active orders
+fn remove_market_order(env: &Env, market_id: u32, order_id: u64) {
+    let orders = get_market_orders_list(env, market_id);
+    let mut new_orders = soroban_sdk::Vec::new(env);
+    for i in 0..orders.len() {
+        let id = orders.get(i).unwrap();
+        if id != order_id {
+            new_orders.push_back(id);
+        }
+    }
+    env.storage()
+        .persistent()
+        .set(&DataKey::ActiveOrdersByMarket(market_id), &new_orders);
+}
+
+/// Get minimum execution fee
+fn get_min_execution_fee(env: &Env) -> u128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MinExecutionFee)
+        .unwrap_or(1_000_000) // Default: 0.1 tokens (assuming 7 decimals)
+}
+
+/// Validate execution fee meets minimum
+fn validate_execution_fee(env: &Env, fee: u128) {
+    let min_fee = get_min_execution_fee(env);
+    if fee < min_fee {
+        panic!("Execution fee below minimum");
+    }
+}
+
+/// Check if order trigger condition is met
+fn check_order_trigger(order: &Order, current_price: i128) -> bool {
+    match order.order_type {
+        OrderType::Limit => {
+            if order.is_long {
+                // Buy limit: trigger when price falls to or below trigger
+                current_price <= order.trigger_price
+            } else {
+                // Sell limit: trigger when price rises to or above trigger
+                current_price >= order.trigger_price
+            }
+        }
+        OrderType::StopLoss => {
+            if order.is_long {
+                // Long SL: trigger when price falls to or below trigger
+                current_price <= order.trigger_price
+            } else {
+                // Short SL: trigger when price rises to or above trigger
+                current_price >= order.trigger_price
+            }
+        }
+        OrderType::TakeProfit => {
+            if order.is_long {
+                // Long TP: trigger when price rises to or above trigger
+                current_price >= order.trigger_price
+            } else {
+                // Short TP: trigger when price falls to or below trigger
+                current_price <= order.trigger_price
+            }
+        }
+    }
+}
+
+/// Check if current price is within acceptable slippage
+fn check_acceptable_price(order: &Order, current_price: i128) -> bool {
+    if order.acceptable_price == 0 {
+        return true; // No slippage limit
+    }
+    match order.order_type {
+        OrderType::Limit => {
+            if order.is_long {
+                // Buying: current price should not exceed acceptable
+                current_price <= order.acceptable_price
+            } else {
+                // Selling: current price should not be below acceptable
+                current_price >= order.acceptable_price
+            }
+        }
+        OrderType::StopLoss | OrderType::TakeProfit => {
+            if order.is_long {
+                // Closing long: receiving price should not be below acceptable
+                current_price >= order.acceptable_price
+            } else {
+                // Closing short: price should not exceed acceptable
+                current_price <= order.acceptable_price
+            }
+        }
+    }
+}
+
+/// Clean up order from all storage locations and emit cancel event
+fn cleanup_order(env: &Env, order: &Order, reason: OrderCancelReason) {
+    remove_order(env, order.order_id);
+    remove_user_order(env, &order.trader, order.order_id);
+    remove_market_order(env, order.market_id, order.order_id);
+
+    // Remove from position orders if SL/TP
+    if order.position_id > 0 {
+        remove_position_order(env, order.position_id, order.order_id);
+    }
+
+    // Emit event
+    OrderCancelledEvent {
+        order_id: order.order_id,
+        order_type: order.order_type.clone(),
+        trader: order.trader.clone(),
+        reason,
+    }
+    .publish(env);
+}
+
+/// Cancel all orders attached to a position (used when position closes)
+fn cancel_position_attached_orders(env: &Env, position_id: u64, reason: OrderCancelReason) {
+    let order_ids = get_position_orders_list(env, position_id);
+
+    for i in 0..order_ids.len() {
+        let order_id = order_ids.get(i).unwrap();
+        if order_exists(env, order_id) {
+            let order = get_order_from_storage(env, order_id);
+
+            // Refund execution fee to trader
+            let token = get_token(env);
+            let token_client = token::Client::new(env, &token);
+            token_client.transfer(
+                &env.current_contract_address(),
+                &order.trader,
+                &(order.execution_fee as i128),
+            );
+
+            // Clean up order storage
+            remove_order(env, order_id);
+            remove_user_order(env, &order.trader, order_id);
+            remove_market_order(env, order.market_id, order_id);
+
+            // Emit cancel event
+            OrderCancelledEvent {
+                order_id,
+                order_type: order.order_type.clone(),
+                trader: order.trader.clone(),
+                reason: reason.clone(),
+            }
+            .publish(env);
+        }
+    }
+
+    // Clear position orders mapping
+    clear_position_orders(env, position_id);
+}
+
+/// Execute a limit order - opens a new position
+fn execute_limit_order(env: &Env, order: &Order, _current_price: i128) -> i128 {
+    // Transfer collateral from trader to pool
+    // Note: Trader must have pre-approved this transfer
+    let token = get_token(env);
+    let token_client = token::Client::new(env, &token);
+    let pool_address = get_liquidity_pool(env);
+
+    token_client.transfer(&order.trader, &pool_address, &(order.collateral as i128));
+
+    // Get oracle for entry price
+    let oracle_address = get_oracle(env);
+    let oracle_client = oracle_integrator::Client::new(env, &oracle_address);
+    let entry_price = oracle_client.get_price(&order.market_id);
+
+    // Check market can accept position
+    let market_manager = get_market_manager(env);
+    let market_client = market_manager::Client::new(env, &market_manager);
+
+    if !market_client.can_open_position(&order.market_id, &order.is_long, &order.size) {
+        panic!("Cannot open position - market paused or OI limit reached");
+    }
+
+    // Get funding snapshots
+    let entry_funding_long = market_client.get_cumulative_funding(&order.market_id, &true);
+    let entry_funding_short = market_client.get_cumulative_funding(&order.market_id, &false);
+
+    // Generate position ID
+    let position_id = increment_position_id(env);
+
+    // Check pool utilization
+    let pool_client = liquidity_pool::Client::new(env, &pool_address);
+    let available = pool_client.get_available_liquidity();
+    let reserved = pool_client.get_reserved_liquidity();
+
+    let config_manager = get_config_manager(env);
+    let config_client = config_manager::Client::new(env, &config_manager);
+    let max_utilization = config_client.max_utilization_ratio();
+
+    if available <= 0 {
+        panic!("no available liquidity");
+    }
+
+    let total_balance = available as u128 + reserved;
+    let reserved_after = reserved + order.size;
+
+    if total_balance > 0 {
+        let utilization_after = ((reserved_after * 10000) / total_balance) as i128;
+        if utilization_after > max_utilization {
+            panic!("Position would exceed max pool utilization");
+        }
+    }
+
+    // Deposit collateral to pool and reserve liquidity
+    pool_client.deposit_position_collateral(
+        &env.current_contract_address(),
+        &position_id,
+        &order.trader,
+        &order.collateral,
+    );
+    pool_client.reserve_liquidity(
+        &env.current_contract_address(),
+        &position_id,
+        &order.size,
+        &order.collateral,
+    );
+
+    // Calculate liquidation price
+    let liquidation_price = calculate_liquidation_price(
+        entry_price,
+        order.collateral,
+        order.size,
+        order.is_long,
+    );
+
+    // Create position
+    let position = Position {
+        trader: order.trader.clone(),
+        market_id: order.market_id,
+        collateral: order.collateral,
+        size: order.size,
+        is_long: order.is_long,
+        entry_price,
+        entry_funding_long,
+        entry_funding_short,
+        last_interaction: env.ledger().timestamp(),
+        liquidation_price,
+    };
+
+    // Store position
+    set_position(env, position_id, &position);
+    add_user_position(env, &order.trader, position_id);
+
+    // Update market open interest
+    market_client.update_open_interest(
+        &env.current_contract_address(),
+        &order.market_id,
+        &order.is_long,
+        &(order.size as i128),
+    );
+
+    // Emit position opened event
+    PositionOpenedEvent {
+        position_id,
+        trader: order.trader.clone(),
+        market_id: order.market_id,
+        collateral: order.collateral,
+        size: order.size,
+        leverage: order.leverage,
+        is_long: order.is_long,
+        entry_price: entry_price as u128,
+    }
+    .publish(env);
+
+    position_id as i128
+}
+
+/// Execute a stop-loss or take-profit order - closes (partially or fully) an existing position
+fn execute_sl_tp_order(env: &Env, order: &Order, current_price: i128) -> i128 {
+    // Check position still exists
+    if !env
+        .storage()
+        .persistent()
+        .has(&DataKey::Position(order.position_id))
+    {
+        panic!("Position no longer exists");
+    }
+
+    let position = get_position(env, order.position_id);
+
+    // Verify position ownership hasn't changed
+    if position.trader != order.trader {
+        panic!("Position ownership changed");
+    }
+
+    // Calculate actual size to close based on current position (may have changed)
+    let size_to_close = if order.close_percentage == 10000 {
+        position.size
+    } else {
+        let calculated = (position.size * order.close_percentage as u128) / 10000;
+        // Don't close more than position size
+        if calculated > position.size {
+            position.size
+        } else {
+            calculated
+        }
+    };
+
+    // Close position (partial or full)
+    if size_to_close >= position.size {
+        // Full close - use close_position logic
+        execute_full_close(env, order.position_id, &position, current_price)
+    } else {
+        // Partial close - use decrease_position logic
+        execute_partial_close(env, order.position_id, &position, size_to_close, current_price)
+    }
+}
+
+/// Execute a full position close (internal, for order execution)
+fn execute_full_close(
+    env: &Env,
+    position_id: u64,
+    position: &Position,
+    current_price: i128,
+) -> i128 {
+    // Calculate comprehensive PnL
+    let pnl = calculate_pnl(env, position, current_price);
+
+    // Get liquidity pool
+    let pool_address = get_liquidity_pool(env);
+    let pool_client = liquidity_pool::Client::new(env, &pool_address);
+
+    // Release reserved liquidity
+    pool_client.release_liquidity(&env.current_contract_address(), &position_id, &position.size);
+
+    // Settle PnL with pool and withdraw collateral to trader
+    let collateral_i128 = position.collateral as i128;
+    let final_amount = collateral_i128 + pnl;
+
+    if pnl >= 0 {
+        pool_client.withdraw_position_collateral(
+            &env.current_contract_address(),
+            &position_id,
+            &position.trader,
+            &position.collateral,
+        );
+        if pnl > 0 {
+            pool_client.settle_trader_pnl(&env.current_contract_address(), &position.trader, &pnl);
+        }
+    } else {
+        let withdrawal_amount = if final_amount > 0 {
+            final_amount as u128
+        } else {
+            0u128
+        };
+        pool_client.withdraw_position_collateral(
+            &env.current_contract_address(),
+            &position_id,
+            &position.trader,
+            &withdrawal_amount,
+        );
+    }
+
+    // Update open interest in MarketManager
+    let market_manager = get_market_manager(env);
+    let market_client = market_manager::Client::new(env, &market_manager);
+    let size_decrease = -(position.size as i128);
+    market_client.update_open_interest(
+        &env.current_contract_address(),
+        &position.market_id,
+        &position.is_long,
+        &size_decrease,
+    );
+
+    // Cancel any other attached orders (except the one being executed)
+    // Note: The executing order is cleaned up by the caller
+    let order_ids = get_position_orders_list(env, position_id);
+    for i in 0..order_ids.len() {
+        let other_order_id = order_ids.get(i).unwrap();
+        if order_exists(env, other_order_id) {
+            let other_order = get_order_from_storage(env, other_order_id);
+
+            // Refund execution fee
+            let token = get_token(env);
+            let token_client = token::Client::new(env, &token);
+            token_client.transfer(
+                &env.current_contract_address(),
+                &other_order.trader,
+                &(other_order.execution_fee as i128),
+            );
+
+            // Clean up
+            remove_order(env, other_order_id);
+            remove_user_order(env, &other_order.trader, other_order_id);
+            remove_market_order(env, other_order.market_id, other_order_id);
+
+            OrderCancelledEvent {
+                order_id: other_order_id,
+                order_type: other_order.order_type,
+                trader: other_order.trader,
+                reason: OrderCancelReason::PositionClosed,
+            }
+            .publish(env);
+        }
+    }
+    clear_position_orders(env, position_id);
+
+    // Delete position from storage
+    remove_position(env, position_id);
+    remove_user_position(env, &position.trader, position_id);
+
+    // Emit position closed event
+    PositionClosedEvent {
+        position_id,
+        trader: position.trader.clone(),
+        pnl,
+    }
+    .publish(env);
+
+    pnl
+}
+
+/// Execute a partial position close (internal, for order execution)
+fn execute_partial_close(
+    env: &Env,
+    position_id: u64,
+    position: &Position,
+    size_to_reduce: u128,
+    current_price: i128,
+) -> i128 {
+    let pool_address = get_liquidity_pool(env);
+    let pool_client = liquidity_pool::Client::new(env, &pool_address);
+
+    // Calculate proportional PnL for the size being closed
+    let total_pnl = calculate_pnl(env, position, current_price);
+    let proportion = (size_to_reduce as i128 * 10000) / (position.size as i128);
+    let realized_pnl = (total_pnl * proportion) / 10000;
+
+    // Realize PnL: adjust collateral
+    let collateral_i128 = position.collateral as i128;
+    let new_collateral_i128 = collateral_i128 + realized_pnl;
+
+    if new_collateral_i128 <= 0 {
+        panic!("Position underwater - would fully close");
+    }
+
+    // Settle realized PnL with trader
+    if realized_pnl > 0 {
+        pool_client.settle_trader_pnl(
+            &env.current_contract_address(),
+            &position.trader,
+            &realized_pnl,
+        );
+    } else if realized_pnl < 0 {
+        let loss_amount = (-realized_pnl) as u128;
+        pool_client.withdraw_position_collateral(
+            &env.current_contract_address(),
+            &position_id,
+            &pool_address,
+            &loss_amount,
+        );
+    }
+
+    // Release reserved liquidity
+    pool_client.release_liquidity(&env.current_contract_address(), &position_id, &size_to_reduce);
+
+    // Update MarketManager open interest
+    let market_manager = get_market_manager(env);
+    let market_client = market_manager::Client::new(env, &market_manager);
+    let size_decrease = -(size_to_reduce as i128);
+    market_client.update_open_interest(
+        &env.current_contract_address(),
+        &position.market_id,
+        &position.is_long,
+        &size_decrease,
+    );
+
+    // Update position
+    let mut updated_position = position.clone();
+    updated_position.collateral = new_collateral_i128 as u128;
+    updated_position.size = position.size - size_to_reduce;
+    updated_position.entry_funding_long =
+        market_client.get_cumulative_funding(&position.market_id, &true);
+    updated_position.entry_funding_short =
+        market_client.get_cumulative_funding(&position.market_id, &false);
+    updated_position.liquidation_price = calculate_liquidation_price(
+        position.entry_price,
+        updated_position.collateral,
+        updated_position.size,
+        position.is_long,
+    );
+    updated_position.last_interaction = env.ledger().timestamp();
+
+    set_position(env, position_id, &updated_position);
+
+    // Update attached order sizes based on new position size
+    let order_ids = get_position_orders_list(env, position_id);
+    for i in 0..order_ids.len() {
+        let order_id = order_ids.get(i).unwrap();
+        if order_exists(env, order_id) {
+            let mut order = get_order_from_storage(env, order_id);
+            // Recalculate size based on percentage and new position size
+            order.size = (updated_position.size * order.close_percentage as u128) / 10000;
+            set_order(env, order_id, &order);
+        }
+    }
+
+    // Emit position modified event
+    PositionModifiedEvent {
+        position_id,
+        trader: position.trader.clone(),
+        new_collateral: updated_position.collateral,
+        new_size: updated_position.size,
+        new_liquidation_price: updated_position.liquidation_price,
+    }
+    .publish(env);
+
+    realized_pnl
 }
 
 /// Validate leverage is within configured limits
@@ -646,6 +1381,9 @@ impl PositionManager {
         if position.trader != trader {
             panic!("Unauthorized: caller does not own this position");
         }
+
+        // Cancel all attached SL/TP orders and refund execution fees
+        cancel_position_attached_orders(&env, position_id, OrderCancelReason::PositionClosed);
 
         // Get current price from OracleIntegrator
         let oracle_address = get_oracle(&env);
@@ -1093,6 +1831,9 @@ impl PositionManager {
         // Retrieve the position
         let position = get_position(&env, position_id);
 
+        // Cancel all attached SL/TP orders and refund execution fees
+        cancel_position_attached_orders(&env, position_id, OrderCancelReason::PositionLiquidated);
+
         // Get current price from OracleIntegrator
         let oracle_address = get_oracle(&env);
         let oracle_client = oracle_integrator::Client::new(&env, &oracle_address);
@@ -1257,6 +1998,554 @@ impl PositionManager {
     /// then call `get_position(id)` for each ID to retrieve full position details.
     pub fn get_user_open_positions(env: Env, trader: Address) -> soroban_sdk::Vec<u64> {
         get_user_positions(&env, &trader)
+    }
+
+    // ========================================================================
+    // ORDER FUNCTIONS - Limit, Stop-Loss, Take-Profit
+    // ========================================================================
+
+    /// Create a limit order to open a position when price reaches target.
+    ///
+    /// # Arguments
+    /// * `trader` - The address creating the order
+    /// * `market_id` - The market identifier (0=XLM, 1=BTC, 2=ETH)
+    /// * `trigger_price` - Price at which to execute (scaled 1e7)
+    /// * `acceptable_price` - Maximum slippage from trigger (0 = any price)
+    /// * `collateral` - Collateral for the new position
+    /// * `leverage` - Leverage for the new position
+    /// * `is_long` - True for long, false for short
+    /// * `execution_fee` - Fee to pay keeper on execution
+    /// * `expiration` - Timestamp when order expires (0 = no expiry)
+    ///
+    /// # Returns
+    /// The order ID
+    pub fn create_limit_order(
+        env: Env,
+        trader: Address,
+        market_id: u32,
+        trigger_price: i128,
+        acceptable_price: i128,
+        collateral: u128,
+        leverage: u32,
+        is_long: bool,
+        execution_fee: u128,
+        expiration: u64,
+    ) -> u64 {
+        trader.require_auth();
+
+        // Validate inputs
+        if trigger_price <= 0 {
+            panic!("Trigger price must be positive");
+        }
+        if collateral == 0 {
+            panic!("Collateral must be positive");
+        }
+        validate_leverage(&env, leverage);
+        validate_execution_fee(&env, execution_fee);
+
+        // Check market is not paused
+        let market_manager = get_market_manager(&env);
+        let market_client = market_manager::Client::new(&env, &market_manager);
+        if market_client.is_market_paused(&market_id) {
+            panic!("Market is paused");
+        }
+
+        // Calculate position size
+        let size = collateral
+            .checked_mul(leverage as u128)
+            .expect("Size overflow");
+        validate_position_size(&env, size);
+
+        // Transfer execution fee from trader to contract
+        let token = get_token(&env);
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(
+            &trader,
+            &env.current_contract_address(),
+            &(execution_fee as i128),
+        );
+
+        // Create order
+        let order_id = increment_order_id(&env);
+        let order = Order {
+            order_id,
+            order_type: OrderType::Limit,
+            trader: trader.clone(),
+            market_id,
+            position_id: 0, // No position yet
+            trigger_price,
+            acceptable_price,
+            collateral,
+            size,
+            leverage,
+            is_long,
+            close_percentage: 0,
+            execution_fee,
+            expiration,
+            created_at: env.ledger().timestamp(),
+        };
+
+        // Store order
+        set_order(&env, order_id, &order);
+        add_user_order(&env, &trader, order_id);
+        add_market_order(&env, market_id, order_id);
+
+        // Emit event
+        OrderCreatedEvent {
+            order_id,
+            order_type: OrderType::Limit,
+            trader: trader.clone(),
+            market_id,
+            position_id: 0,
+            trigger_price,
+            size,
+            is_long,
+            expiration,
+        }
+        .publish(&env);
+
+        order_id
+    }
+
+    /// Create a stop-loss order attached to an existing position.
+    ///
+    /// # Arguments
+    /// * `trader` - The position owner
+    /// * `position_id` - The position to protect
+    /// * `trigger_price` - Price at which to close position
+    /// * `acceptable_price` - Minimum acceptable price for closure (0 = any)
+    /// * `close_percentage` - Percentage to close (10000 = 100%)
+    /// * `execution_fee` - Fee to pay keeper
+    /// * `expiration` - Order expiration (0 = no expiry)
+    ///
+    /// # Returns
+    /// The order ID
+    pub fn create_stop_loss(
+        env: Env,
+        trader: Address,
+        position_id: u64,
+        trigger_price: i128,
+        acceptable_price: i128,
+        close_percentage: u32,
+        execution_fee: u128,
+        expiration: u64,
+    ) -> u64 {
+        trader.require_auth();
+
+        // Get and validate position ownership
+        let position = get_position(&env, position_id);
+        if position.trader != trader {
+            panic!("Unauthorized: caller does not own this position");
+        }
+
+        // Validate close percentage
+        if close_percentage == 0 || close_percentage > 10000 {
+            panic!("Invalid close percentage");
+        }
+
+        // Validate execution fee
+        validate_execution_fee(&env, execution_fee);
+
+        // Validate stop-loss price
+        // For longs: SL triggers when price falls below trigger (must be below current)
+        // For shorts: SL triggers when price rises above trigger (must be above current)
+        let oracle_address = get_oracle(&env);
+        let oracle_client = oracle_integrator::Client::new(&env, &oracle_address);
+        let current_price = oracle_client.get_price(&position.market_id);
+
+        if position.is_long {
+            if trigger_price >= current_price {
+                panic!("Stop-loss for long must be below current price");
+            }
+            if trigger_price <= position.liquidation_price {
+                panic!("Stop-loss must be above liquidation price");
+            }
+        } else {
+            if trigger_price <= current_price {
+                panic!("Stop-loss for short must be above current price");
+            }
+            if trigger_price >= position.liquidation_price {
+                panic!("Stop-loss must be below liquidation price");
+            }
+        }
+
+        // Transfer execution fee
+        let token = get_token(&env);
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(
+            &trader,
+            &env.current_contract_address(),
+            &(execution_fee as i128),
+        );
+
+        // Calculate size to close
+        let size_to_close = (position.size * close_percentage as u128) / 10000;
+
+        // Create order
+        let order_id = increment_order_id(&env);
+        let order = Order {
+            order_id,
+            order_type: OrderType::StopLoss,
+            trader: trader.clone(),
+            market_id: position.market_id,
+            position_id,
+            trigger_price,
+            acceptable_price,
+            collateral: 0,
+            size: size_to_close,
+            leverage: 0,
+            is_long: position.is_long,
+            close_percentage,
+            execution_fee,
+            expiration,
+            created_at: env.ledger().timestamp(),
+        };
+
+        // Store order
+        set_order(&env, order_id, &order);
+        add_user_order(&env, &trader, order_id);
+        add_position_order(&env, position_id, order_id);
+        add_market_order(&env, position.market_id, order_id);
+
+        // Emit event
+        OrderCreatedEvent {
+            order_id,
+            order_type: OrderType::StopLoss,
+            trader: trader.clone(),
+            market_id: position.market_id,
+            position_id,
+            trigger_price,
+            size: size_to_close,
+            is_long: position.is_long,
+            expiration,
+        }
+        .publish(&env);
+
+        order_id
+    }
+
+    /// Create a take-profit order attached to an existing position.
+    ///
+    /// # Arguments
+    /// * `trader` - The position owner
+    /// * `position_id` - The position to take profit from
+    /// * `trigger_price` - Price at which to close position
+    /// * `acceptable_price` - Minimum acceptable price for closure (0 = any)
+    /// * `close_percentage` - Percentage to close (10000 = 100%)
+    /// * `execution_fee` - Fee to pay keeper
+    /// * `expiration` - Order expiration (0 = no expiry)
+    ///
+    /// # Returns
+    /// The order ID
+    pub fn create_take_profit(
+        env: Env,
+        trader: Address,
+        position_id: u64,
+        trigger_price: i128,
+        acceptable_price: i128,
+        close_percentage: u32,
+        execution_fee: u128,
+        expiration: u64,
+    ) -> u64 {
+        trader.require_auth();
+
+        // Get and validate position ownership
+        let position = get_position(&env, position_id);
+        if position.trader != trader {
+            panic!("Unauthorized: caller does not own this position");
+        }
+
+        // Validate close percentage
+        if close_percentage == 0 || close_percentage > 10000 {
+            panic!("Invalid close percentage");
+        }
+
+        // Validate execution fee
+        validate_execution_fee(&env, execution_fee);
+
+        // Validate take-profit price
+        // For longs: TP triggers when price rises above trigger (must be above current)
+        // For shorts: TP triggers when price falls below trigger (must be below current)
+        let oracle_address = get_oracle(&env);
+        let oracle_client = oracle_integrator::Client::new(&env, &oracle_address);
+        let current_price = oracle_client.get_price(&position.market_id);
+
+        if position.is_long {
+            if trigger_price <= current_price {
+                panic!("Take-profit for long must be above current price");
+            }
+        } else {
+            if trigger_price >= current_price {
+                panic!("Take-profit for short must be below current price");
+            }
+        }
+
+        // Transfer execution fee
+        let token = get_token(&env);
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(
+            &trader,
+            &env.current_contract_address(),
+            &(execution_fee as i128),
+        );
+
+        // Calculate size to close
+        let size_to_close = (position.size * close_percentage as u128) / 10000;
+
+        // Create order
+        let order_id = increment_order_id(&env);
+        let order = Order {
+            order_id,
+            order_type: OrderType::TakeProfit,
+            trader: trader.clone(),
+            market_id: position.market_id,
+            position_id,
+            trigger_price,
+            acceptable_price,
+            collateral: 0,
+            size: size_to_close,
+            leverage: 0,
+            is_long: position.is_long,
+            close_percentage,
+            execution_fee,
+            expiration,
+            created_at: env.ledger().timestamp(),
+        };
+
+        // Store order
+        set_order(&env, order_id, &order);
+        add_user_order(&env, &trader, order_id);
+        add_position_order(&env, position_id, order_id);
+        add_market_order(&env, position.market_id, order_id);
+
+        // Emit event
+        OrderCreatedEvent {
+            order_id,
+            order_type: OrderType::TakeProfit,
+            trader: trader.clone(),
+            market_id: position.market_id,
+            position_id,
+            trigger_price,
+            size: size_to_close,
+            is_long: position.is_long,
+            expiration,
+        }
+        .publish(&env);
+
+        order_id
+    }
+
+    /// Cancel an active order.
+    ///
+    /// # Arguments
+    /// * `trader` - The order owner
+    /// * `order_id` - The order to cancel
+    pub fn cancel_order(env: Env, trader: Address, order_id: u64) {
+        trader.require_auth();
+
+        let order = get_order_from_storage(&env, order_id);
+
+        // Verify ownership
+        if order.trader != trader {
+            panic!("Unauthorized: caller does not own this order");
+        }
+
+        // Refund execution fee
+        let token = get_token(&env);
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &trader,
+            &(order.execution_fee as i128),
+        );
+
+        // Clean up storage
+        cleanup_order(&env, &order, OrderCancelReason::UserCancelled);
+    }
+
+    /// Execute an order when conditions are met. Called by keeper bots.
+    ///
+    /// # Arguments
+    /// * `keeper` - The keeper executing the order
+    /// * `order_id` - The order to execute
+    ///
+    /// # Returns
+    /// For Limit: the new position_id as i128
+    /// For SL/TP: the realized PnL
+    pub fn execute_order(env: Env, keeper: Address, order_id: u64) -> i128 {
+        keeper.require_auth();
+
+        let order = get_order_from_storage(&env, order_id);
+
+        // Check expiration
+        if order.expiration > 0 && env.ledger().timestamp() > order.expiration {
+            // Refund execution fee to trader and cancel
+            let token = get_token(&env);
+            let token_client = token::Client::new(&env, &token);
+            token_client.transfer(
+                &env.current_contract_address(),
+                &order.trader,
+                &(order.execution_fee as i128),
+            );
+            cleanup_order(&env, &order, OrderCancelReason::Expired);
+            panic!("Order expired");
+        }
+
+        // Get current price
+        let oracle_address = get_oracle(&env);
+        let oracle_client = oracle_integrator::Client::new(&env, &oracle_address);
+        let current_price = oracle_client.get_price(&order.market_id);
+
+        // Check market is not paused
+        let market_manager = get_market_manager(&env);
+        let market_client = market_manager::Client::new(&env, &market_manager);
+        if market_client.is_market_paused(&order.market_id) {
+            panic!("Market is paused");
+        }
+
+        // Verify trigger condition is met
+        if !check_order_trigger(&order, current_price) {
+            panic!("Order trigger condition not met");
+        }
+
+        // Verify acceptable price
+        if !check_acceptable_price(&order, current_price) {
+            panic!("Current price outside acceptable range");
+        }
+
+        // Execute based on order type
+        let result = match order.order_type {
+            OrderType::Limit => execute_limit_order(&env, &order, current_price),
+            OrderType::StopLoss | OrderType::TakeProfit => {
+                execute_sl_tp_order(&env, &order, current_price)
+            }
+        };
+
+        // Pay execution fee to keeper
+        let token = get_token(&env);
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &keeper,
+            &(order.execution_fee as i128),
+        );
+
+        // Emit execution event
+        let position_id_for_event = match order.order_type {
+            OrderType::Limit => result as u64,
+            _ => order.position_id,
+        };
+        let pnl_for_event = match order.order_type {
+            OrderType::Limit => 0,
+            _ => result,
+        };
+
+        OrderExecutedEvent {
+            order_id: order.order_id,
+            order_type: order.order_type.clone(),
+            trader: order.trader.clone(),
+            keeper: keeper.clone(),
+            execution_price: current_price,
+            position_id: position_id_for_event,
+            pnl: pnl_for_event,
+            execution_fee: order.execution_fee,
+        }
+        .publish(&env);
+
+        // Clean up order storage (don't emit cancel event since we emitted execute event)
+        remove_order(&env, order.order_id);
+        remove_user_order(&env, &order.trader, order.order_id);
+        remove_market_order(&env, order.market_id, order.order_id);
+        if order.position_id > 0 {
+            remove_position_order(&env, order.position_id, order.order_id);
+        }
+
+        result
+    }
+
+    // ========================================================================
+    // ORDER QUERY FUNCTIONS
+    // ========================================================================
+
+    /// Get order details.
+    pub fn get_order(env: Env, order_id: u64) -> Order {
+        get_order_from_storage(&env, order_id)
+    }
+
+    /// Get all active orders for a user.
+    pub fn get_user_orders(env: Env, trader: Address) -> soroban_sdk::Vec<u64> {
+        get_user_orders_list(&env, &trader)
+    }
+
+    /// Get all orders attached to a position.
+    pub fn get_position_orders(env: Env, position_id: u64) -> soroban_sdk::Vec<u64> {
+        get_position_orders_list(&env, position_id)
+    }
+
+    /// Get all active orders for a market (for keeper bots).
+    pub fn get_market_orders(env: Env, market_id: u32) -> soroban_sdk::Vec<u64> {
+        get_market_orders_list(&env, market_id)
+    }
+
+    /// Check if an order can be executed at current price.
+    pub fn can_execute_order(env: Env, order_id: u64) -> bool {
+        if !order_exists(&env, order_id) {
+            return false;
+        }
+
+        let order = get_order_from_storage(&env, order_id);
+
+        // Check expiration
+        if order.expiration > 0 && env.ledger().timestamp() > order.expiration {
+            return false;
+        }
+
+        // Check market not paused
+        let market_manager = get_market_manager(&env);
+        let market_client = market_manager::Client::new(&env, &market_manager);
+        if market_client.is_market_paused(&order.market_id) {
+            return false;
+        }
+
+        // Check position exists for SL/TP
+        if order.position_id > 0 {
+            if !env
+                .storage()
+                .persistent()
+                .has(&DataKey::Position(order.position_id))
+            {
+                return false;
+            }
+        }
+
+        // Check trigger condition
+        let oracle_address = get_oracle(&env);
+        let oracle_client = oracle_integrator::Client::new(&env, &oracle_address);
+        let current_price = oracle_client.get_price(&order.market_id);
+
+        check_order_trigger(&order, current_price)
+    }
+
+    /// Set minimum execution fee (admin only).
+    pub fn set_min_execution_fee(env: Env, admin: Address, fee: u128) {
+        admin.require_auth();
+
+        let config_manager = get_config_manager(&env);
+        let config_client = config_manager::Client::new(&env, &config_manager);
+        let config_admin = config_client.admin();
+
+        if admin != config_admin {
+            panic!("Unauthorized");
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::MinExecutionFee, &fee);
+    }
+
+    /// Get minimum execution fee.
+    pub fn min_execution_fee(env: Env) -> u128 {
+        get_min_execution_fee(&env)
     }
 }
 
