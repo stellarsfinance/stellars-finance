@@ -1,50 +1,30 @@
 #![no_std]
 
-//! # LiquidityPool Contract
+//! # Liquidity Pool Contract
 //!
-//! The LiquidityPool contract is the core liquidity management system for the Stellars Finance
-//! perpetuals protocol. It implements a single liquidity pool architecture inspired by the GLP model.
+//! Manages liquidity provision for the Stellars Finance perpetual trading protocol.
+//! This contract acts as the counterparty to all trader positions and handles PnL settlement.
 //!
-//! ## Overview
+//! ## Key Features
+//! - **LP Deposits/Withdrawals**: Users deposit tokens and receive LP shares proportionally.
+//!   Withdrawals return tokens based on current share value (may differ from deposit due to PnL).
+//! - **Position Collateral**: Tracks collateral deposited by traders for each position.
+//! - **Liquidity Reservation**: Reserves liquidity when positions open, releases on close.
+//! - **PnL Settlement**: Pays profitable traders from pool reserves.
 //!
-//! This contract serves as the central repository for all protocol funds. Liquidity providers (LPs)
-//! deposit tokens into the pool and receive LP shares representing their proportional ownership.
-//! These funds are used as counterparty liquidity for all perpetual trading positions across
-//! multiple markets (XLM-PERP, BTC-PERP, ETH-PERP).
+//! ## Share Calculation
+//! - First deposit: shares = amount (1:1 ratio)
+//! - Subsequent deposits: shares = (deposit * total_shares) / pool_value_before_deposit
+//! This ensures existing LPs maintain their proportional ownership.
 //!
-//! ## Key Responsibilities
+//! ## Safety Mechanisms
+//! - **Utilization Ratio**: Limits how much liquidity can be reserved for positions
+//! - **Minimum Reserve Ratio**: Ensures minimum liquidity always available for withdrawals
+//! - **Position Manager Authorization**: Only the authorized PositionManager can modify positions
 //!
-//! - **Deposit Management**: Accept token deposits from LPs and mint corresponding LP shares
-//! - **Withdrawal Management**: Burn LP shares and return proportional token amounts to LPs
-//! - **Share Calculation**: Calculate LP shares based on pool value and total supply
-//! - **Balance Tracking**: Track total deposited amounts and individual LP balances
-//! - **Counterparty Liquidity**: Provide liquidity for trader positions (long/short)
-//! - **Liquidity Reservation**: Reserves liquidity when positions open and releases it when they close
-//!
-//! ## LP Share Mechanism
-//!
-//! - LPs receive shares proportional to their deposit relative to total pool value
-//! - Shares represent claim on pool assets, which fluctuate based on trader PnL
-//! - When traders lose, pool value increases (LPs profit)
-//! - When traders win, pool value decreases (LPs take losses)
-//!
-//! ## Storage Strategy
-//!
-//! - **Instance Storage**: Stores total share supply and pool configuration
-//! - **Persistent Storage**: Stores individual LP share balances and total deposit amounts to track pool ownership and liquidity
-//!
-//! ## Contract Stability
-//!
-//! This contract is kept stable and rarely upgraded since it holds all user funds. Changes to
-//! trading logic and features are isolated in other contracts (PositionManager, MarketManager)
-//! to minimize risk to the fund-holding contract.
-//!
-//! ## Future Enhancements
-//!
-//! - Integration with PositionManager for PnL tracking
-//! - Multi-token support for diversified pool composition
-//! - Dynamic fee distribution to LPs
-//! - Utilization-based deposit/withdrawal limits
+//! ## Usage
+//! - LPs call `deposit()` and `withdraw()` directly
+//! - PositionManager calls collateral and reservation functions when managing positions
 
 use soroban_sdk::{contract, contractimpl, contracttype, log, token, Address, Env};
 
@@ -279,13 +259,16 @@ impl LiquidityPool {
         // Get actual balance after transfer (protects against PnL changes)
         let balance = get_balance(&env);
 
-        // Calculate shares to mint based on actual pool value
-        // If first deposit, shares = amount (1:1 ratio)
-        // Otherwise, shares = (amount * total_shares) / (balance - amount)
-        // Note: (balance - amount) represents the pool value before this deposit
+        // Calculate shares to mint using pro-rata formula to maintain fair LP ownership
+        // First deposit: 1:1 ratio (no existing shares to dilute)
+        // Subsequent deposits: new_shares = (deposit * total_shares) / pool_value_before
+        // This ensures new depositors get shares proportional to their contribution
+        // Example: If pool has 1000 tokens and 100 shares, depositing 100 tokens gets 10 shares
+        // because 100 * 100 / 1000 = 10, maintaining 10% ownership for 10% contribution
         let shares_to_mint = if total_shares == 0 {
             amount
         } else {
+            // pool_value_before = current balance minus the just-deposited amount
             let pool_value_before = balance - amount;
             if pool_value_before <= 0 {
                 panic!("invalid pool state");
@@ -351,12 +334,16 @@ impl LiquidityPool {
             panic!("insufficient available liquidity");
         }
 
-        // Check minimum reserve ratio
+        // Enforce minimum reserve ratio to ensure pool solvency
+        // This protects LPs by ensuring the pool always has enough unreserved liquidity
+        // to handle potential position closures and payouts
         let config_manager = get_config_manager(&env);
         let config_client = crate::config_manager::Client::new(&env, &config_manager);
         let min_reserve_ratio = config_client.min_liquidity_reserve_ratio();
 
-        // After withdrawal, ensure minimum reserve is maintained
+        // Calculate how much unreserved liquidity must remain after withdrawal
+        // Example: If min_reserve_ratio = 2000 (20%) and balance_after = 1000,
+        // then min_reserve_required = 200, and (balance - reserved) must be >= 200
         let balance_after_withdrawal = balance - tokens_to_return;
         let min_reserve_required = (balance_after_withdrawal * min_reserve_ratio) / 10000;
 
@@ -643,12 +630,7 @@ impl LiquidityPool {
     /// # Panics
     ///
     /// Panics if caller is not the authorized position manager
-    pub fn settle_trader_pnl(
-        env: Env,
-        position_manager: Address,
-        trader: Address,
-        pnl: i128,
-    ) {
+    pub fn settle_trader_pnl(env: Env, position_manager: Address, trader: Address, pnl: i128) {
         require_position_manager(&env, &position_manager);
 
         // Only pay out positive PnL (losses handled by reduced collateral withdrawal)

@@ -1,77 +1,42 @@
 #![no_std]
 
-//! # PositionManager Contract
+//! # Position Manager Contract
 //!
-//! The PositionManager contract handles all individual trader position operations for the
-//! Stellars Finance perpetuals protocol. It manages the lifecycle of perpetual positions
-//! from opening to closing, including liquidations and position modifications.
+//! Core position lifecycle management for the Stellars Finance perpetual trading protocol.
+//! Handles opening, closing, modifying, and liquidating leveraged positions, plus advanced
+//! order types (limit orders, stop-loss, take-profit).
 //!
-//! ## Overview
+//! ## Key Features
+//! - **Position Lifecycle**: Open, close, increase, and decrease leveraged positions
+//! - **Liquidations**: Force-close undercollateralized positions with keeper incentives
+//! - **Advanced Orders**: Limit orders to open at target price, SL/TP to manage risk
+//! - **PnL Calculation**: Comprehensive PnL including price movement, funding, and fees
 //!
-//! This contract is responsible for managing leveraged perpetual trading positions across
-//! multiple markets (XLM-PERP, BTC-PERP, ETH-PERP). Traders can open long or short positions
-//! with leverage ranging from 5x to 20x, and the contract tracks all position details including
-//! collateral, size, entry price, and unrealized PnL.
+//! ## Position Structure
+//! Each position tracks:
+//! - Trader address and market ID
+//! - Collateral and size (notional value = collateral × leverage)
+//! - Direction (long/short) and entry price
+//! - Funding rate snapshots for accurate funding payment calculation
+//! - Liquidation price (automatically calculated)
 //!
-//! This contract changes most frequently as new features are added, which is why it's isolated
-//! from the fund-holding contract (LiquidityPool).
+//! ## Order Types
+//! - **Limit Order**: Opens a new position when price reaches trigger level
+//! - **Stop-Loss**: Closes position to limit losses when price moves against you
+//! - **Take-Profit**: Closes position to secure gains when price target is reached
 //!
-//! ## Key Responsibilities
+//! ## PnL Components
+//! 1. **Price PnL**: Profit/loss from price movement
+//! 2. **Funding Payments**: Periodic payments based on market imbalance
+//! 3. **Borrowing Fees**: Time-based fees for leverage (not yet implemented)
 //!
-//! - **Position Opening**: Create new long/short positions with specified leverage and collateral
-//! - **Position Closing**: Close existing positions and realize PnL
-//! - **Position Modification**: Increase or decrease position size and collateral
-//! - **Liquidation Logic**: Liquidate undercollateralized positions when margin falls below threshold
-//! - **PnL Calculation**: Track unrealized and realized profit/loss for all positions
-//! - **Collateral Management**: Handle collateral deposits, withdrawals, and requirements
+//! ## Liquidation
+//! Positions are liquidatable when collateral ratio falls below maintenance margin.
+//! Keepers receive 60% of liquidation fee as incentive, 40% goes to the pool.
 //!
-//! ## Leverage System
-//!
-//! - Minimum leverage: 5x
-//! - Maximum leverage: 20x
-//! - Leverage determines position size relative to collateral
-//! - Higher leverage = higher liquidation risk
-//!
-//! ## Position Lifecycle
-//!
-//! 1. **Open**: Trader deposits collateral and specifies leverage, size, and direction (long/short)
-//! 2. **Active**: Position is monitored for liquidation conditions and funding payments
-//! 3. **Modify**: Trader can add/remove collateral or increase/decrease position size
-//! 4. **Close**: Trader closes position at market price, PnL is realized and settled
-//! 5. **Liquidate**: If margin ratio falls below threshold, keepers can liquidate the position
-//!
-//! ## Liquidation Mechanism
-//!
-//! - **Maintenance Margin**: 1% (100x max effective leverage)
-//! - **Liquidation Trigger**: When remaining_collateral < size × 0.01
-//! - **Liquidation Fee**: 0.5% of position size (split: 0.3% keeper, 0.2% pool)
-//! - **Full Liquidation Only**: No partial liquidations in MVP
-//!
-//! ## Integration Points
-//!
-//! - **LiquidityPool**: Source of counterparty liquidity for positions
-//! - **OracleIntegrator**: Price feeds for entry/exit prices and liquidations
-//! - **MarketManager**: Market state, funding rates, and open interest limits
-//! - **ConfigManager**: Leverage limits, liquidation thresholds, and fee parameters
-//!
-//! ## Storage Strategy
-//!
-//! - **Persistent Storage with TTL**: All position data uses Persistent Storage with TTL
-//! - **TTL Extension**: Extend TTL on every position interaction (100,000 ledgers ~14 days)
-//! - **Position Data Fields**: Each position contains account address, market identifier,
-//!   collateral token and amount, position size in USD and tokens, entry price, direction
-//!   (long/short), cumulative fee indices for funding and borrowing calculations, and timestamps
-//! - **Keeper Monitoring**: Keeper bot monitors and extends TTL before expiration
-//!
-//! ## Future Enhancements
-//!
-//! - Limit orders: Execute when price reaches specified level
-//! - Stop-loss: Automatically close position to limit losses
-//! - Take-profit: Automatically close position to secure gains
-//! - Cross-margin support (share collateral across positions)
-//! - Portfolio margin (risk-based margining)
-//! - Conditional orders (OCO, trailing stops)
-//! - Position delegation and social trading
+//! ## Usage
+//! - Traders call position functions directly
+//! - Keeper bots call `execute_order()` and `liquidate_position()`
 
 use soroban_sdk::{contract, contractevent, contractimpl, contracttype, log, token, Address, Env};
 
@@ -184,9 +149,9 @@ pub struct Order {
     pub size: u128,             // Position size (Limit) or size to close (SL/TP)
     pub leverage: u32,          // For Limit orders only
     pub is_long: bool,
-    pub close_percentage: u32,  // For SL/TP: 10000 = 100%
-    pub execution_fee: u128,    // Fee paid to keeper
-    pub expiration: u64,        // 0 = no expiry
+    pub close_percentage: u32, // For SL/TP: 10000 = 100%
+    pub execution_fee: u128,   // Fee paid to keeper
+    pub expiration: u64,       // 0 = no expiry
     pub created_at: u64,
 }
 
@@ -230,14 +195,14 @@ pub enum DataKey {
     Position(u64),
     NextPositionId,
     ConfigManager,
-    UserPositions(Address),      // Maps user address to Vec<u64> of their open position IDs
+    UserPositions(Address), // Maps user address to Vec<u64> of their open position IDs
     // Order-related keys
-    Order(u64),                  // Individual order storage
-    NextOrderId,                 // Auto-increment counter for order IDs
-    UserOrders(Address),         // User -> Vec<order_ids>
-    PositionOrders(u64),         // Position -> Vec<attached SL/TP order_ids>
-    ActiveOrdersByMarket(u32),   // Market -> Vec<order_ids> for keeper queries
-    MinExecutionFee,             // Minimum fee for keepers
+    Order(u64),                // Individual order storage
+    NextOrderId,               // Auto-increment counter for order IDs
+    UserOrders(Address),       // User -> Vec<order_ids>
+    PositionOrders(u64),       // Position -> Vec<attached SL/TP order_ids>
+    ActiveOrdersByMarket(u32), // Market -> Vec<order_ids> for keeper queries
+    MinExecutionFee,           // Minimum fee for keepers
 }
 
 // Helper functions for storage
@@ -368,9 +333,7 @@ fn get_order_from_storage(env: &Env, order_id: u64) -> Order {
 
 /// Check if an order exists
 fn order_exists(env: &Env, order_id: u64) -> bool {
-    env.storage()
-        .persistent()
-        .has(&DataKey::Order(order_id))
+    env.storage().persistent().has(&DataKey::Order(order_id))
 }
 
 /// Store an order in persistent storage with TTL extension
@@ -378,16 +341,16 @@ fn set_order(env: &Env, order_id: u64, order: &Order) {
     env.storage()
         .persistent()
         .set(&DataKey::Order(order_id), order);
-    env.storage()
-        .persistent()
-        .extend_ttl(&DataKey::Order(order_id), ORDER_TTL_LEDGERS, ORDER_TTL_LEDGERS);
+    env.storage().persistent().extend_ttl(
+        &DataKey::Order(order_id),
+        ORDER_TTL_LEDGERS,
+        ORDER_TTL_LEDGERS,
+    );
 }
 
 /// Delete an order from storage
 fn remove_order(env: &Env, order_id: u64) {
-    env.storage()
-        .persistent()
-        .remove(&DataKey::Order(order_id));
+    env.storage().persistent().remove(&DataKey::Order(order_id));
 }
 
 /// Get the next order ID (starts at 1 for consistency with position IDs)
@@ -652,7 +615,11 @@ fn execute_limit_order(env: &Env, order: &Order, _current_price: i128) -> i128 {
     // Transfer escrowed collateral from contract to pool
     let token = get_token(env);
     let token_client = token::Client::new(env, &token);
-    token_client.transfer(&env.current_contract_address(), &pool_address, &(order.collateral as i128));
+    token_client.transfer(
+        &env.current_contract_address(),
+        &pool_address,
+        &(order.collateral as i128),
+    );
 
     // Get oracle for entry price
     let oracle_address = get_oracle(env);
@@ -711,12 +678,8 @@ fn execute_limit_order(env: &Env, order: &Order, _current_price: i128) -> i128 {
     );
 
     // Calculate liquidation price
-    let liquidation_price = calculate_liquidation_price(
-        entry_price,
-        order.collateral,
-        order.size,
-        order.is_long,
-    );
+    let liquidation_price =
+        calculate_liquidation_price(entry_price, order.collateral, order.size, order.is_long);
 
     // Create position
     let position = Position {
@@ -795,10 +758,23 @@ fn execute_sl_tp_order(env: &Env, order: &Order, current_price: i128) -> i128 {
     // Pass the executing order_id so we don't refund its fee (keeper gets it instead)
     if size_to_close >= position.size {
         // Full close - use close_position logic
-        execute_full_close(env, order.position_id, &position, current_price, Some(order.order_id))
+        execute_full_close(
+            env,
+            order.position_id,
+            &position,
+            current_price,
+            Some(order.order_id),
+        )
     } else {
         // Partial close - use decrease_position logic
-        execute_partial_close(env, order.position_id, &position, size_to_close, current_price, Some(order.order_id))
+        execute_partial_close(
+            env,
+            order.position_id,
+            &position,
+            size_to_close,
+            current_price,
+            Some(order.order_id),
+        )
     }
 }
 
@@ -819,7 +795,11 @@ fn execute_full_close(
     let pool_client = liquidity_pool::Client::new(env, &pool_address);
 
     // Release reserved liquidity
-    pool_client.release_liquidity(&env.current_contract_address(), &position_id, &position.size);
+    pool_client.release_liquidity(
+        &env.current_contract_address(),
+        &position_id,
+        &position.size,
+    );
 
     // Settle PnL with pool and withdraw collateral to trader
     let collateral_i128 = position.collateral as i128;
@@ -958,7 +938,11 @@ fn execute_partial_close(
     }
 
     // Release reserved liquidity
-    pool_client.release_liquidity(&env.current_contract_address(), &position_id, &size_to_reduce);
+    pool_client.release_liquidity(
+        &env.current_contract_address(),
+        &position_id,
+        &size_to_reduce,
+    );
 
     // Update MarketManager open interest
     let market_manager = get_market_manager(env);
@@ -1435,11 +1419,7 @@ impl PositionManager {
                 &position.collateral,
             );
             if pnl > 0 {
-                pool_client.settle_trader_pnl(
-                    &env.current_contract_address(),
-                    &trader,
-                    &pnl,
-                );
+                pool_client.settle_trader_pnl(&env.current_contract_address(), &trader, &pnl);
             }
         } else {
             // Loss: return reduced collateral (collateral + negative pnl)
@@ -2487,27 +2467,63 @@ impl PositionManager {
     // ORDER QUERY FUNCTIONS
     // ========================================================================
 
-    /// Get order details.
+    /// Get order details by ID.
+    ///
+    /// # Arguments
+    /// * `order_id` - The order identifier
+    ///
+    /// # Returns
+    /// The full Order struct with all order parameters
+    ///
+    /// # Panics
+    /// Panics if order does not exist
     pub fn get_order(env: Env, order_id: u64) -> Order {
         get_order_from_storage(&env, order_id)
     }
 
-    /// Get all active orders for a user.
+    /// Get all active order IDs for a user.
+    ///
+    /// # Arguments
+    /// * `trader` - The trader address
+    ///
+    /// # Returns
+    /// Vector of order IDs (use `get_order()` to fetch full details for each)
     pub fn get_user_orders(env: Env, trader: Address) -> soroban_sdk::Vec<u64> {
         get_user_orders_list(&env, &trader)
     }
 
-    /// Get all orders attached to a position.
+    /// Get all orders (SL/TP) attached to a position.
+    ///
+    /// # Arguments
+    /// * `position_id` - The position identifier
+    ///
+    /// # Returns
+    /// Vector of order IDs for stop-loss and take-profit orders on this position
     pub fn get_position_orders(env: Env, position_id: u64) -> soroban_sdk::Vec<u64> {
         get_position_orders_list(&env, position_id)
     }
 
-    /// Get all active orders for a market (for keeper bots).
+    /// Get all active orders for a market. Used by keeper bots to discover
+    /// executable orders.
+    ///
+    /// # Arguments
+    /// * `market_id` - The market identifier (0=XLM, 1=BTC, 2=ETH)
+    ///
+    /// # Returns
+    /// Vector of all active order IDs in this market
     pub fn get_market_orders(env: Env, market_id: u32) -> soroban_sdk::Vec<u64> {
         get_market_orders_list(&env, market_id)
     }
 
     /// Check if an order can be executed at current price.
+    /// Used by keepers to filter executable orders before calling `execute_order()`.
+    ///
+    /// # Arguments
+    /// * `order_id` - The order identifier
+    ///
+    /// # Returns
+    /// True if the order exists, is not expired, market is not paused,
+    /// position still exists (for SL/TP), and trigger condition is met
     pub fn can_execute_order(env: Env, order_id: u64) -> bool {
         if !order_exists(&env, order_id) {
             return false;
@@ -2546,7 +2562,15 @@ impl PositionManager {
         check_order_trigger(&order, current_price)
     }
 
-    /// Set minimum execution fee (admin only).
+    /// Set minimum execution fee required for orders (admin only).
+    /// The execution fee incentivizes keeper bots to execute orders.
+    ///
+    /// # Arguments
+    /// * `admin` - The admin address (must match ConfigManager admin)
+    /// * `fee` - The minimum fee in token base units (e.g., 1_000_000 = 0.1 tokens with 7 decimals)
+    ///
+    /// # Panics
+    /// Panics if caller is not the admin
     pub fn set_min_execution_fee(env: Env, admin: Address, fee: u128) {
         admin.require_auth();
 
@@ -2563,7 +2587,10 @@ impl PositionManager {
             .set(&DataKey::MinExecutionFee, &fee);
     }
 
-    /// Get minimum execution fee.
+    /// Get the minimum execution fee required for orders.
+    ///
+    /// # Returns
+    /// The minimum fee in token base units (default: 1_000_000 = 0.1 tokens)
     pub fn min_execution_fee(env: Env) -> u128 {
         get_min_execution_fee(&env)
     }

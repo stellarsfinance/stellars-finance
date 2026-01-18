@@ -1,81 +1,33 @@
 #![no_std]
 
-//! # MarketManager Contract
+//! # Market Manager Contract
 //!
-//! The MarketManager contract handles all market-level operations and state management for the
-//! Stellars Finance perpetuals protocol. It manages multiple perpetual markets, tracks open
-//! interest, calculates funding rates, and controls market availability.
+//! Manages perpetual futures markets for the Stellars Finance protocol. Handles open interest
+//! tracking and funding rate calculations for each market (XLM, BTC, ETH perpetuals).
 //!
-//! ## Overview
-//!
-//! This contract orchestrates the high-level operations of perpetual markets including XLM-PERP,
-//! BTC-PERP, and ETH-PERP. It ensures market health by tracking open interest limits, calculating
-//! and applying funding rates, and providing circuit breaker functionality to pause markets during
-//! extreme conditions or maintenance.
-//!
-//! ## Key Responsibilities
-//!
-//! - **Market Creation**: Initialize new perpetual markets with specific parameters
-//! - **Funding Rate Management**: Calculate and update funding rates every 60 seconds
-//! - **Open Interest Tracking**: Monitor long/short open interest and enforce OI caps
-//! - **Market State Control**: Pause/unpause markets for maintenance or risk management
-//! - **Market Parameters**: Manage market-specific configuration (max OI, funding rate bounds)
-//!
+//! ## Key Features
+//! - **Market Creation**: Admin can create new perpetual markets with configurable max OI
+//! - **Open Interest Tracking**: Tracks long and short OI separately for each market
+//! - **Funding Rate Calculation**: Calculates funding rates based on market imbalance
+//! - **Market Controls**: Admin can pause/unpause markets to halt new position openings
 //!
 //! ## Funding Rate Mechanism
+//! Funding payments balance long and short positions by transferring value from the
+//! dominant side to the minority side:
+//! - Positive funding rate: Longs pay shorts (when long OI > short OI)
+//! - Negative funding rate: Shorts pay longs (when short OI > long OI)
 //!
-//! Funding rates are calculated and applied every 60 seconds to balance long/short positions:
+//! The funding rate uses a quadratic formula to increase pressure as imbalance grows:
+//! `funding_rate = base_rate * (imbalance_ratio)^2`
 //!
-//! - **Positive funding**: Longs pay shorts (when longs > shorts)
-//! - **Negative funding**: Shorts pay longs (when shorts > longs)
-//! - **Funding formula**: funding_rate = base_rate × (imbalance_ratio)²
-//! - **Rate bounds**: Capped at maximum funding rate to prevent extreme payments
-//! - **Payment**: Trader-to-trader payment (LPs not involved)
-//! - **Settlement**: Continuously accrued and settled on position close or liquidation
+//! ## Cumulative Funding
+//! Funding is tracked cumulatively (bps * seconds) to allow precise per-position
+//! calculations without iterating through all positions on each update.
 //!
-//! ## Open Interest Management
-//!
-//! - **Long OI**: Total notional value of all long positions
-//! - **Short OI**: Total notional value of all short positions
-//! - **Max OI Cap**: Per-market limit to control risk exposure
-//! - **Imbalance Limits**: May restrict opening positions on overweight side
-//! - **Dynamic Caps**: OI limits may adjust based on pool TVL and market conditions
-//!
-//! ## Market Pausing
-//!
-//! Markets can be paused in several scenarios:
-//! - Protocol upgrades or maintenance
-//! - Oracle failures or manipulation concerns
-//! - Extreme market volatility
-//! - Risk management measures
-//!
-//! When paused:
-//! - New positions cannot be opened
-//! - Existing positions can still be closed
-//! - Liquidations continue to function
-//! - Funding rate updates are suspended
-//!
-//!
-//! ## Integration Points
-//!
-//! - **PositionManager**: Consults market state before opening positions
-//! - **OracleIntegrator**: Uses price data for funding rate calculations
-//! - **LiquidityPool**: Considers pool TVL for dynamic OI limits
-//! - **ConfigManager**: Retrieves market-specific parameters and limits
-//!
-//! ## Storage Strategy
-//!
-//! - **Instance Storage**: Stores market configuration and current state (funding rate, total long/short OI) per market
-//!
-//! ## Future Enhancements
-//!
-//! - Circuit breakers: Automatic market pausing when price deviation exceeds threshold,
-//!   OI imbalance exceeds safety limits, unusual liquidation activity, or pool utilization critical
-//! - Dynamic funding rate multipliers based on volatility
-//! - Cross-market risk metrics and correlation tracking
-//! - Automated market maker (AMM) style funding
-//! - Time-weighted average price (TWAP) funding calculations
-//! - Multi-asset collateral support per market
+//! ## Usage
+//! - Admin creates markets via `create_market()`
+//! - Keeper bot calls `update_funding_rate()` every 60 seconds
+//! - PositionManager calls `update_open_interest()` when positions open/close
 
 use soroban_sdk::{
     contract, contractevent, contractimpl, contracttype, symbol_short, Address, Env,
@@ -328,22 +280,32 @@ impl MarketManager {
             return;
         }
 
-        // Calculate imbalance ratio: (long_oi - short_oi) / total_oi
+        // === FUNDING RATE CALCULATION ===
+        // The funding rate incentivizes balance between longs and shorts by making
+        // the dominant side pay the minority side. Uses quadratic scaling to increase
+        // pressure as imbalance grows.
+
+        // Step 1: Calculate imbalance ratio as (long_oi - short_oi) / total_oi
+        // Positive = longs dominate, Negative = shorts dominate
         let oi_diff = (market.long_open_interest as i128) - (market.short_open_interest as i128);
 
-        // Imbalance ratio in basis points (10000 = 100%)
+        // Convert to basis points (10000 bps = 100%)
+        // Example: If long=60, short=40, total=100, then imbalance = 2000 bps (20%)
         let imbalance_ratio_bps = (oi_diff * 10000) / (total_oi as i128);
 
-        // Calculate funding rate: base_rate * (imbalance_ratio)^2
-        // imbalance_ratio is in bps, so imbalance^2 needs to be scaled
+        // Step 2: Apply quadratic scaling - funding pressure grows with square of imbalance
+        // This creates gentle pressure at small imbalances but strong pressure at large ones
+        // Example: 20% imbalance (2000 bps) -> squared = (2000 * 2000) / 10000 = 400 bps
         let imbalance_squared = (imbalance_ratio_bps * imbalance_ratio_bps) / 10000;
 
+        // Step 3: Scale by base funding rate (default 100 bps = 1% per hour)
         // funding_rate = base_rate * imbalance_squared / 10000
+        // Example: 100 * 400 / 10000 = 4 bps per hour
         let mut funding_rate = (market.base_funding_rate * imbalance_squared) / 10000;
 
-        // Restore sign: squaring loses direction, so apply sign based on original imbalance
-        // Positive imbalance (longs > shorts) = positive rate (longs pay)
-        // Negative imbalance (shorts > longs) = negative rate (shorts pay)
+        // Step 4: Restore direction - squaring loses the sign, so reapply based on imbalance
+        // Positive imbalance (longs > shorts) = positive rate = longs pay shorts
+        // Negative imbalance (shorts > longs) = negative rate = shorts pay longs
         if imbalance_ratio_bps < 0 {
             funding_rate = -funding_rate;
         }
@@ -355,19 +317,22 @@ impl MarketManager {
             funding_rate = -market.max_funding_rate;
         }
 
-        // Calculate funding payment for this period
-        // funding_rate is in basis points per hour
-        // Store as (funding_rate * time_elapsed) without dividing by 3600
-        // This avoids integer division precision loss
-        // The division by 3600 will happen in PnL calculation
+        // === CUMULATIVE FUNDING ACCUMULATION ===
+        // Store funding as (bps_per_hour * seconds_elapsed) to preserve precision
+        // Division by 3600 (seconds per hour) happens in PositionManager's PnL calculation
+        // This avoids integer truncation that would occur if we divided here
+        // Example: 4 bps/hour * 60 seconds = 240 bps·seconds stored
         let total_funding = funding_rate * (time_elapsed as i128);
 
-        // Update cumulative funding
+        // Track cumulative funding separately for longs and shorts
+        // - cumulative_funding_long: total funding longs have paid (when rate > 0)
+        // - cumulative_funding_short: total funding shorts have paid (when rate < 0)
+        // Positions calculate their owed funding by comparing current cumulative vs entry snapshot
         if funding_rate > 0 {
-            // Longs pay shorts
+            // Positive rate: longs pay shorts
             market.cumulative_funding_long += total_funding;
         } else if funding_rate < 0 {
-            // Shorts pay longs
+            // Negative rate: shorts pay longs
             market.cumulative_funding_short += total_funding.abs();
         }
 

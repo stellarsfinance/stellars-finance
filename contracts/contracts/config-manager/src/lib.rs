@@ -1,136 +1,27 @@
 #![no_std]
 
-//! # ConfigManager Contract
+//! # Config Manager Contract
 //!
-//! The ConfigManager contract serves as the centralized configuration store for all protocol
-//! parameters across the Stellars Finance perpetuals system. It provides a secure and flexible
-//! way to manage protocol settings, fees, limits, and operational parameters.
+//! Central configuration hub for the Stellars Finance protocol. This contract stores
+//! all system parameters and maintains a registry of other contract addresses.
 //!
-//! ## Overview
-//!
-//! This contract acts as the single source of truth for all configurable parameters used by
-//! other contracts in the protocol. It implements access control to ensure only authorized
-//! administrators can modify settings, while providing read-only access to all other contracts
-//! and users. This allows parameter updates without upgrading other contracts.
-//!
-//! ## Key Responsibilities
-//!
-//! - **Parameter Storage**: Store all protocol configuration parameters
-//! - **Access Control**: Restrict parameter updates to authorized administrators
-//! - **Parameter Validation**: Ensure parameters are within acceptable bounds
-//! - **Configuration Versioning**: Track configuration changes over time
-//! - **Default Values**: Provide sensible defaults for all parameters
-//!
-//! ## Configuration Categories
-//!
-//! ### 1. Trading Parameters
-//! - **MIN_LEVERAGE**: Minimum allowed leverage (default: 5x)
-//! - **MAX_LEVERAGE**: Maximum allowed leverage (default: 20x)
-//! - **MIN_POSITION_SIZE**: Minimum position size in USD
-//! - **MAX_POSITION_SIZE**: Maximum position size in USD
-//!
-//! ### 2. Fee Configuration
-//! - **MAKER_FEE_BPS**: Fee for limit orders in basis points (e.g., 2 = 0.02%)
-//! - **TAKER_FEE_BPS**: Fee for market orders in basis points (e.g., 5 = 0.05%)
-//! - **LIQUIDATION_FEE_BPS**: Fee paid to liquidators (e.g., 50 = 0.5%)
-//! - **FUNDING_FEE_BPS**: Maximum funding rate per hour
-//! - **PROTOCOL_FEE_SHARE**: Portion of fees going to protocol treasury (e.g., 20 = 20%)
-//!
-//! ### 3. Risk Parameters
-//! - **LIQUIDATION_THRESHOLD**: Margin ratio triggering liquidation (e.g., 9000 = 90%)
-//! - **MAINTENANCE_MARGIN**: Minimum margin to maintain position (e.g., 5000 = 50%)
-//! - **INITIAL_MARGIN**: Margin required to open position based on leverage
-//! - **MAX_PRICE_DEVIATION_BPS**: Max price deviation between oracles (e.g., 500 = 5%)
-//! - **PRICE_STALENESS_THRESHOLD**: Maximum age of oracle price in seconds (e.g., 60)
-//!
-//! ### 4. Market Limits
-//! - **MAX_OPEN_INTEREST**: Maximum total open interest per market in USD
-//! - **MAX_POOL_UTILIZATION**: Maximum % of pool that can be used (e.g., 8000 = 80%)
-//! - **MAX_POSITION_OI_RATIO**: Max single position as % of total OI (e.g., 500 = 5%)
-//! - **MAX_FUNDING_RATE**: Maximum funding rate per hour in basis points
-//!
-//! ### 5. Time Parameters
-//! - **FUNDING_INTERVAL**: Time between funding rate updates (default: 60 seconds)
-//! - **LIQUIDATION_GRACE_PERIOD**: Time before liquidatable position can be liquidated
-//! - **PRICE_UPDATE_INTERVAL**: Minimum time between price updates
-//! - **TTL_EXTENSION_THRESHOLD**: When to extend storage TTL
-//!
-//! ### 6. Operational Settings
-//! - **ADMIN_ADDRESS**: Protocol administrator address
-//! - **TREASURY_ADDRESS**: Protocol treasury for fee collection
-//! - **KEEPER_MIN_REWARD**: Minimum reward for keeper operations
-//! - **EMERGENCY_PAUSE**: Global emergency pause flag
-//!
-//! ## Storage Strategy
-//!
-//! - **Instance Storage**: Used for all configuration parameters
-//!   - Fast access for frequently read values
-//!   - Lower cost than persistent storage for static data
-//!   - Parameters don't need to persist across upgrades (can be re-initialized)
-//!   - Suitable for configuration that changes infrequently
+//! ## Key Features
+//! - **Contract Registry**: Stores addresses of all protocol contracts (LiquidityPool,
+//!   PositionManager, MarketManager, OracleIntegrator, Token, DIA/Reflector oracles)
+//! - **Trading Parameters**: Min/max leverage (default 5-20x), minimum position size
+//! - **Fee Parameters**: Maker fee, taker fee, liquidation fee (all in basis points)
+//! - **Risk Parameters**: Liquidation threshold, maintenance margin, max price deviation
+//! - **Time Parameters**: Funding interval (60s), price staleness threshold
+//! - **Liquidity Parameters**: Max utilization ratio (80%), min reserve ratio (20%)
 //!
 //! ## Access Control
+//! All configuration changes require admin authorization. The admin can be transferred
+//! to a new address via `set_admin()`.
 //!
-//! - **Read Access**: Public - any contract or user can read parameters
-//! - **Write Access**: Restricted - only admin can set/update parameters
-//! - **Admin Management**: Admin can transfer admin role to new address
-//! - **Multi-sig Support**: Future enhancement for governance-based updates
-//!
-//! ## Parameter Update Flow
-//!
-//! 1. Admin proposes parameter change
-//! 2. Validate new value is within acceptable bounds
-//! 3. Check parameter dependencies (e.g., MIN_LEVERAGE < MAX_LEVERAGE)
-//! 4. Update parameter in instance storage
-//! 5. Emit parameter updated event with old and new values
-//! 6. Log change for audit trail
-//!
-//! ## Safety Mechanisms
-//!
-//! - **Bounds Checking**: All parameters have min/max limits
-//! - **Consistency Validation**: Related parameters are validated together
-//! - **Emergency Pause**: Can disable trading while allowing position closes
-//! - **Gradual Updates**: Time delays for sensitive parameter changes
-//! - **Rollback Capability**: Ability to revert to previous configuration
-//!
-//! ## Integration Points
-//!
-//! - **PositionManager**: Reads leverage limits, fees, liquidation thresholds
-//! - **MarketManager**: Reads funding intervals, OI caps, market parameters
-//! - **OracleIntegrator**: Reads price staleness limits, deviation thresholds
-//! - **LiquidityPool**: Reads pool utilization limits, fee distributions
-//!
-//! ## Example Parameters
-//!
-//! ```rust
-//! // Trading
-//! MIN_LEVERAGE = 5
-//! MAX_LEVERAGE = 20
-//! MIN_POSITION_SIZE = 10_000_000  // 10 USD (7 decimals)
-//!
-//! // Fees (basis points)
-//! MAKER_FEE_BPS = 2     // 0.02%
-//! TAKER_FEE_BPS = 5     // 0.05%
-//! LIQUIDATION_FEE_BPS = 50  // 0.5%
-//!
-//! // Risk
-//! LIQUIDATION_THRESHOLD = 9000  // 90%
-//! MAINTENANCE_MARGIN = 5000     // 50%
-//! MAX_PRICE_DEVIATION_BPS = 500 // 5%
-//!
-//! // Time
-//! FUNDING_INTERVAL = 60  // 60 seconds
-//! PRICE_STALENESS_THRESHOLD = 60  // 60 seconds
-//! ```
-//!
-//! ## Future Enhancements
-//!
-//! - Governance-based parameter updates (DAO voting)
-//! - Time-locked parameter changes for security
-//! - Parameter change proposals with discussion period
-//! - Automated parameter optimization based on market conditions
-//! - Per-market parameter overrides
-//! - Parameter change impact simulation
+//! ## Usage
+//! Other contracts in the protocol import this contract to read configuration values
+//! and resolve contract addresses. This creates a single source of truth for all
+//! protocol settings.
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
 

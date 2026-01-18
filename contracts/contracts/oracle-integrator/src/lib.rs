@@ -1,129 +1,38 @@
 #![no_std]
 
-//! # OracleIntegrator Contract
+//! # Oracle Integrator Contract
 //!
-//! The OracleIntegrator contract is responsible for fetching, validating, and aggregating price
-//! data from multiple oracle sources for the Stellars Finance perpetuals protocol. It ensures
-//! accurate and manipulation-resistant pricing for all trading operations.
+//! Price feed aggregation and validation for the Stellars Finance protocol. Provides
+//! reliable price data for position entry/exit, liquidation, and funding calculations.
 //!
-//! ## Overview
+//! ## Key Features
+//! - **Multi-Oracle Aggregation**: Fetches prices from DIA and Reflector oracles (production)
+//! - **Test Mode**: Simulated prices with configurable oscillation for testing
+//! - **Price Validation**: Staleness checks, bounds validation, and cross-oracle deviation checks
+//! - **Median Calculation**: Returns median of oracle prices to resist manipulation
 //!
-//! This contract integrates with multiple decentralized oracle networks to obtain reliable price
-//! feeds for all supported perpetual markets (XLM-PERP, BTC-PERP, ETH-PERP). By aggregating prices
-//! from multiple sources and using median calculation, it provides robust protection against
-//! oracle manipulation and single points of failure.
+//! ## Supported Markets
+//! - Market 0: XLM/USD
+//! - Market 1: BTC/USD
+//! - Market 2: ETH/USD
 //!
-//! ## Key Responsibilities
+//! ## Test Mode
+//! When enabled, returns simulated prices that oscillate ±10% per hour around a base price.
+//! Use `set_fixed_price_mode(true)` to disable oscillation for deterministic testing.
 //!
-//! - **Price Fetching**: Query multiple oracle sources for current asset prices
-//! - **Price Validation**: Verify price freshness, bounds, and consistency across sources
-//! - **Price Aggregation**: Calculate median price from multiple oracle feeds
-//! - **Deviation Detection**: Identify and handle excessive price deviations between sources
-//! - **Oracle Health Monitoring**: Track oracle availability and reliability
-//! - **Fallback Logic**: Gracefully handle oracle failures with backup sources
+//! ## Production Mode (Not Yet Implemented)
+//! Will fetch prices from DIA and Reflector oracles, validate each price, check
+//! cross-oracle deviation (max 5%), and return the median.
 //!
-//! ## Supported Oracle Networks
-//!
-//! ### 2. DIA Oracle (Secondary)
-//! - **Priority**: Medium
-//! - **Features**: Transparent data sourcing, customizable feeds, historical data
-//! - **Update Frequency**: Configurable (typically 1-5 minutes)
-//! - **Asset Coverage**: 20,000+ assets, full source transparency
-//! - **Use Case**: Secondary validation and fallback source
-//!
-//! ### 3. Reflector Oracle (Tertiary)
-//! - **Priority**: Lowest
-//! - **Features**: Stellar-native oracle, community-driven, multi-source aggregation
-//! - **Update Frequency**: Variable, Stellar DEX integration
-//! - **Use Case**: Tertiary fallback and cross-validation
-//!
-//! ## Price Aggregation Strategy
-//!
-//! The contract uses a **median-based aggregation** approach with bid/ask model:
-//!
-//! 1. Fetch prices from all available oracles (Pyth, DIA, Reflector)
-//! 2. Validate each price:
-//!    - Check timestamp freshness (reject stale prices)
-//!    - Verify price is within reasonable bounds
-//!    - Validate signatures using Ed25519 (Stellar native)
-//!    - Ensure oracle is responding correctly
-//!    - Timestamp-based replay protection (no blockhash dependency)
-//! 3. Calculate median of valid prices
-//! 4. Implement min/max price spread capture (bid/ask model from GMX)
-//! 5. Apply conservative pricing:
-//!    - Longs pay max price when opening, receive min when closing
-//!    - Shorts pay min price when opening, receive max when closing
-//!    - Protects LPs from unfavorable price execution
-//! 6. Compare median against individual sources:
-//!    - If any price deviates >X% from median, flag as potential issue
-//!    - If majority of sources are unavailable, pause trading
-//! 7. Return median price with confidence indicator
-//!
-//! ## Price Validation Rules
-//!
-//! - **Staleness Check**: Prices older than 60 seconds are rejected
-//! - **Deviation Threshold**: If price sources differ by >5%, trigger alert
-//! - **Minimum Sources**: Require at least 2 valid sources for trading
-//! - **Circuit Breaker**: If price moves >20% in single update, pause market
-//! - **Confidence Intervals**: Use Pyth confidence data to assess price quality
-//!
-//! ## Oracle Failure Handling
-//!
-//! When oracles fail or become unavailable:
-//!
-//! 1. **Single Oracle Failure**: Continue with remaining sources if ≥2 available
-//! 2. **Multiple Oracle Failure**: Pause new position opening, allow closes/liquidations
-//! 3. **Complete Oracle Failure**: Emergency pause all trading operations
-//! 4. **Inconsistent Prices**: If deviation exceeds threshold, use most conservative price
-//!
-//! ## Storage Strategy
-//!
-//! - **Temporary Storage**: Stores latest validated prices with timestamps (prices are frequently updated)
-//! - **Instance Storage**: Stores oracle signer addresses for signature validation
-//!
-//! Temporary storage is ideal because:
-//! - Prices are frequently updated (60s or less)
-//! - Historical prices not needed (PositionManager stores entry prices)
-//! - Reduces storage costs significantly
-//! - Automatic cleanup via TTL mechanism
-//!
-//! ## Integration Points
-//!
-//! - **PositionManager**: Provides prices for position entry, exit, and liquidations
-//! - **MarketManager**: Supplies price data for funding rate calculations
-//! - **ConfigManager**: Retrieves oracle configuration (staleness limits, deviation thresholds)
-//!
-//! ## Security Considerations
-//!
-//! - **Oracle Manipulation**: Median aggregation prevents single-source manipulation
-//! - **Front-Running**: Use commit-reveal or signed prices where possible
-//! - **Staleness**: Strict timestamp validation prevents replay attacks
-//! - **Flash Crashes**: Circuit breakers prevent exploitation of temporary price anomalies
-//! - **Oracle Collusion**: Multiple independent oracle networks reduce collusion risk
-//!
-//! ## Performance Optimization
-//!
-//! - Batch oracle queries when possible to reduce cross-contract call overhead
-//! - Cache aggregated prices with short TTL (5-10 seconds) to minimize computation
-//! - Use temporary storage to minimize ledger space costs
-//! - Implement lazy validation (validate on-demand rather than continuously)
-//!
-//! ## Future Enhancements
-//!
-//! - Time-weighted average price (TWAP) calculation
-//! - Volatility-adjusted staleness thresholds
-//! - On-chain oracle reputation scoring
-//! - Automated oracle source rotation based on reliability
-//! - Support for additional oracle networks (Chainlink, Band, etc.)
-//! - Historical price data retention for analytics
+//! ## Usage
+//! - PositionManager calls `get_price()` for entry/exit prices
+//! - Admin configures test mode via `set_test_mode()`
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Map, String};
 
 #[cfg(not(test))]
 mod config_manager {
-    soroban_sdk::contractimport!(
-        file = "../../target/wasm32v1-none/release/config_manager.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../../target/wasm32v1-none/release/config_manager.wasm");
 }
 
 #[contracttype]
@@ -192,9 +101,21 @@ fn get_simulated_price(env: &Env, market_id: u32) -> (i128, u64) {
         return (base_price, timestamp);
     }
 
-    // Create predictable price oscillation: ±10% per hour
+    // === TEST PRICE OSCILLATION ===
+    // Creates predictable price movement for testing funding rates and liquidations
+    // Price oscillates ±10% over each hour in a sawtooth pattern
+
+    // time_in_hour: 0-3599 seconds within the current hour
     let time_in_hour = (timestamp % 3600) as i128;
+
+    // variation: linear ramp from 0 to 10% of base price over the hour
+    // At t=0: variation=0, at t=3599: variation≈10% of base_price
+    // Formula: (base_price * seconds) / 36000 gives 0-10% range
     let variation = (base_price * time_in_hour) / 36000; // Max ±10%
+
+    // Flip direction every 30 minutes (1800 seconds)
+    // Even half-hours: price increases, Odd half-hours: price decreases
+    // This creates continuous oscillation without sudden jumps
     let oscillating_multiplier = if (timestamp / 1800) % 2 == 0 { 1 } else { -1 };
 
     let price = base_price + (variation * oscillating_multiplier);
