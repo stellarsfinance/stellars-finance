@@ -1,6 +1,6 @@
 use soroban_sdk::Env;
 
-use crate::common::{assertions::*, position_manager, market_manager, setup::*, time_helpers::*};
+use crate::common::{assertions::*, oracle_integrator, position_manager, market_manager, setup::*, time_helpers::*};
 
 #[test]
 fn test_funding_accumulation_over_time() {
@@ -9,6 +9,10 @@ fn test_funding_accumulation_over_time() {
 
     let position_client = position_manager::Client::new(&env, &test_env.position_manager_id);
     let market_client = market_manager::Client::new(&env, &test_env.market_manager_id);
+
+    // Enable fixed price mode so we can test funding in isolation (without price PnL)
+    let oracle_client = oracle_integrator::Client::new(&env, &test_env.oracle_id);
+    oracle_client.set_fixed_price_mode(&test_env.admin, &true);
 
     let market_id = 0u32;
     let collateral = 1_000_000_000u128;
@@ -60,6 +64,10 @@ fn test_funding_long_heavy_market() {
     let position_client = position_manager::Client::new(&env, &test_env.position_manager_id);
     let market_client = market_manager::Client::new(&env, &test_env.market_manager_id);
 
+    // Enable fixed price mode so we can test funding in isolation
+    let oracle_client = oracle_integrator::Client::new(&env, &test_env.oracle_id);
+    oracle_client.set_fixed_price_mode(&test_env.admin, &true);
+
     let market_id = 0u32;
     let collateral = 1_000_000_000u128;
     let leverage = 10u32;
@@ -89,15 +97,18 @@ fn test_funding_long_heavy_market() {
     let updated_funding_short = market_client.get_cumulative_funding(&market_id, &false);
 
     // In a long-heavy market:
-    // - Longs pay funding (cumulative funding decreases or stays same)
-    // - Shorts receive funding (cumulative funding increases)
+    // - Longs pay funding (cumulative funding for longs increases as they owe more)
+    // - Shorts receive funding (but cumulative_funding_short stays 0 since shorts don't pay)
+    // The key insight: shorts profit because they see cumulative_funding_long increased
+    // and their PnL calculation subtracts (paid - received) where received = cumulative_funding_long delta
     assert!(
-        updated_funding_long <= initial_funding_long,
-        "Long funding should decrease or stay same"
+        updated_funding_long >= initial_funding_long,
+        "Long cumulative funding should increase as longs pay"
     );
+    // cumulative_funding_short stays 0 since shorts don't pay in a long-heavy market
     assert!(
-        updated_funding_short >= initial_funding_short,
-        "Short funding should increase or stay same"
+        updated_funding_short == initial_funding_short,
+        "Short cumulative funding should stay same (shorts don't pay in long-heavy market)"
     );
 
     // Close short position and verify it received funding
@@ -173,6 +184,10 @@ fn test_funding_realization_on_close() {
     let position_client = position_manager::Client::new(&env, &test_env.position_manager_id);
     let market_client = market_manager::Client::new(&env, &test_env.market_manager_id);
 
+    // Enable fixed price mode so we can test funding in isolation
+    let oracle_client = oracle_integrator::Client::new(&env, &test_env.oracle_id);
+    oracle_client.set_fixed_price_mode(&test_env.admin, &true);
+
     let market_id = 0u32;
     let collateral = 1_000_000_000u128;
     let leverage = 10u32;
@@ -211,6 +226,10 @@ fn test_multiple_funding_intervals() {
 
     let position_client = position_manager::Client::new(&env, &test_env.position_manager_id);
     let market_client = market_manager::Client::new(&env, &test_env.market_manager_id);
+
+    // Enable fixed price mode so we can test funding in isolation
+    let oracle_client = oracle_integrator::Client::new(&env, &test_env.oracle_id);
+    oracle_client.set_fixed_price_mode(&test_env.admin, &true);
 
     let market_id = 0u32;
     let collateral = 1_000_000_000u128;

@@ -155,14 +155,16 @@ export interface Client {
      *
      * # Arguments
      *
+     * * `admin` - The administrator address (must authorize)
      * * `config_manager` - The Config Manager contract address
      * * `token` - The token contract address for this pool
      *
      * # Panics
      *
-     * Panics if the pool is already initialized
+     * Panics if the pool is already initialized or admin doesn't authorize
      */
-    initialize: ({ config_manager, token }: {
+    initialize: ({ admin, config_manager, token }: {
+        admin: string;
         config_manager: string;
         token: string;
     }, options?: {
@@ -275,6 +277,38 @@ export interface Client {
         position_id: u64;
         size: u128;
         collateral: u128;
+    }, options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<null>>;
+    /**
+     * Construct and simulate a settle_trader_pnl transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Settle trader PnL by transferring profit from pool reserves.
+     *
+     * # Arguments
+     *
+     * * `position_manager` - The Position Manager contract address
+     * * `trader` - The trader's address
+     * * `pnl` - The PnL amount (positive = profit to pay trader)
+     *
+     * # Panics
+     *
+     * Panics if caller is not the authorized position manager
+     */
+    settle_trader_pnl: ({ position_manager, trader, pnl }: {
+        position_manager: string;
+        trader: string;
+        pnl: i128;
     }, options?: {
         /**
          * The fee to pay for the transaction. Default: BASE_FEE
@@ -436,6 +470,40 @@ export interface Client {
         simulate?: boolean;
     }) => Promise<AssembledTransaction<u128>>;
     /**
+     * Construct and simulate a record_position_collateral transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Record position collateral that was already transferred to the pool.
+     * Used by limit orders where collateral is escrowed in position manager
+     * and then transferred directly to pool.
+     *
+     * # Arguments
+     *
+     * * `position_manager` - The Position Manager contract address
+     * * `position_id` - The position ID
+     * * `amount` - The collateral amount to record
+     *
+     * # Panics
+     *
+     * Panics if caller is not the authorized position manager
+     */
+    record_position_collateral: ({ position_manager, position_id, amount }: {
+        position_manager: string;
+        position_id: u64;
+        amount: u128;
+    }, options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<null>>;
+    /**
      * Construct and simulate a deposit_position_collateral transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
      * Deposit collateral for a position.
      *
@@ -527,12 +595,14 @@ export declare class Client extends ContractClient {
         get_total_shares: (json: string) => AssembledTransaction<bigint>;
         release_liquidity: (json: string) => AssembledTransaction<null>;
         reserve_liquidity: (json: string) => AssembledTransaction<null>;
+        settle_trader_pnl: (json: string) => AssembledTransaction<null>;
         get_total_deposits: (json: string) => AssembledTransaction<bigint>;
         set_position_manager: (json: string) => AssembledTransaction<null>;
         get_utilization_ratio: (json: string) => AssembledTransaction<number>;
         get_reserved_liquidity: (json: string) => AssembledTransaction<bigint>;
         get_available_liquidity: (json: string) => AssembledTransaction<bigint>;
         get_position_collateral: (json: string) => AssembledTransaction<bigint>;
+        record_position_collateral: (json: string) => AssembledTransaction<null>;
         deposit_position_collateral: (json: string) => AssembledTransaction<null>;
         withdraw_position_collateral: (json: string) => AssembledTransaction<null>;
     };

@@ -2,316 +2,235 @@
 
 Stellars Finance is a decentralized perpetuals trading protocol built on the Stellar blockchain using Soroban smart contracts. The protocol enables traders to open leveraged long and short positions on crypto assets with up to 20x leverage, backed by a single liquidity pool model inspired by GMX's GLP.
 
-## Overview
-
-Stellars Finance implements a perpetual futures exchange with the following features:
+## Features
 
 - **Leveraged Trading**: 5-20x leverage on perpetual positions
-- **Multiple Markets**: XLM-PERP, BTC-PERP, and ETH-PERP
-- **Single Liquidity Pool**: Unified liquidity model where LPs act as counterparties to traders
+- **Multiple Markets**: XLM-PERP (0), BTC-PERP (1), ETH-PERP (2)
+- **Single Liquidity Pool**: Unified liquidity model where LPs act as counterparties
 - **Advanced Order Types**: Market orders, limit orders, stop-loss, and take-profit
-- **Funding Rates**: Automated funding payments updated every 60 seconds
-- **Liquidation System**: Keeper-driven liquidations with incentive rewards
-- **Multi-Oracle Integration**: Price feeds from Pyth Network, DIA, and Reflector oracles
-- **Auto-Deleveraging (ADL)**: Risk management mechanism for extreme market conditions
+- **Funding Rates**: Automated funding payments based on OI imbalance
+- **Borrowing Fees**: Time-based fees for holding positions
+- **PnL Calculation**: Includes price movement, funding payments, and borrowing costs
 
-## Architecture
+## Contracts
 
-The protocol consists of 5 specialized Soroban smart contracts:
+### 1. ConfigManager
+**Path**: `contracts/config-manager/`
 
-### 1. LiquidityPool Contract
+Central configuration hub and contract registry for the protocol.
 
-**Purpose**: Core liquidity management system for the protocol
+**Key Functions**:
+- `initialize(admin)` - Set admin and default parameters
+- `set_admin(admin, new_admin)` - Transfer admin role
+- Contract registry: `set_*_contract()` / `get_*_contract()` for all protocol contracts
+- Parameter setters: `set_leverage_limits()`, `set_fees()`, `set_risk_params()`, `set_borrow_rate()`
 
-**Responsibilities**:
-- Accept token deposits from liquidity providers (LPs)
-- Mint LP shares representing proportional ownership
-- Handle LP withdrawals by burning shares
-- Provide counterparty liquidity for all trader positions
-- Track total pool value and individual LP balances
+**Default Parameters**:
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| MinLeverage | 5 | |
+| MaxLeverage | 20 | |
+| MinPositionSize | 10,000,000 | Base units |
+| MakerFeeBps | 2 | 0.02% |
+| TakerFeeBps | 5 | 0.05% |
+| LiquidationFeeBps | 50 | 0.50% |
+| LiquidationThreshold | 9000 | 90% |
+| MaintenanceMargin | 5000 | 50% |
+| BorrowRatePerSecond | 1 | Scaled 1e7, ~3.15% APR |
 
-**Key Mechanisms**:
-- LPs receive shares proportional to their deposit relative to total pool value
-- Pool value fluctuates based on trader PnL (traders lose = LPs profit, traders win = LPs lose)
-- Single unified pool acts as the house for all markets
+---
 
-**Implemented Functions**:
-- `deposit(user, token, amount)` - Deposit tokens and receive LP shares
-- `withdraw(user, token, shares)` - Burn shares and withdraw tokens
-- `get_shares(user)` - Get user's LP share balance
-- `get_total_shares()` - Get total LP shares in circulation
-- `get_total_deposits()` - Get total deposited value
+### 2. PositionManager
+**Path**: `contracts/position-manager/`
 
-### 2. PositionManager Contract
+Core position and order lifecycle management.
 
-**Purpose**: Manages individual trader perpetual positions
+**Position Functions**:
+- `open_position(trader, market_id, collateral, size, leverage, is_long)` - Open new position
+- `close_position(trader, position_id)` - Close position and settle PnL
+- `get_position(position_id)` - Get position details
+- `get_user_positions(trader)` - Get all positions for a user
+- `calculate_pnl(position_id)` - Calculate current PnL (price + funding + borrowing)
 
-**Responsibilities**:
-- Open new long/short positions with specified leverage (5-20x)
-- Close existing positions and realize PnL
-- Modify positions (increase/decrease size or collateral)
-- Execute liquidations for undercollateralized positions
-- Calculate unrealized PnL for active positions
-- Track collateral, entry prices, and funding debt
+**Order Functions**:
+- `create_limit_order(...)` - Create limit order to open position at trigger price
+- `create_stop_loss(trader, position_id, trigger_price, close_percentage, execution_fee)` - Set stop-loss
+- `create_take_profit(trader, position_id, trigger_price, close_percentage, execution_fee)` - Set take-profit
+- `execute_order(keeper, order_id)` - Execute order when conditions met
+- `cancel_order(trader, order_id)` - Cancel pending order
+- `can_execute_order(order_id)` - Check if order trigger conditions are met
+- `get_order(order_id)` / `get_user_orders(trader)` / `get_position_orders(position_id)`
 
-**Position Lifecycle**:
-1. **Open**: Trader deposits collateral and specifies leverage, size, direction
-2. **Active**: Position monitored for liquidation conditions and funding payments
-3. **Modify**: Add/remove collateral or increase/decrease size
-4. **Close**: Close position (market/limit), PnL realized and settled
-5. **Liquidate**: If margin ratio < threshold, keepers liquidate position
+**Position Data**:
+```rust
+Position {
+    trader: Address,
+    market_id: u32,           // 0=XLM, 1=BTC, 2=ETH
+    collateral: u128,
+    size: u128,               // notional = collateral * leverage
+    is_long: bool,
+    entry_price: i128,        // 1e7 scaled
+    entry_funding_long: i128,
+    entry_funding_short: i128,
+    last_interaction: u64,    // for borrowing fee calculation
+    liquidation_price: i128,
+}
+```
 
-**Order Types Supported**:
-- Market orders (immediate execution at oracle price)
-- Limit orders (execute when price reaches specified level)
-- Stop-loss (automatically close to limit losses)
-- Take-profit (automatically close to secure gains)
+---
 
-**Stub Functions** (to be implemented):
-- `open_position(trader, market_id, collateral, size, leverage, is_long)`
-- `close_position(trader, position_id)`
-- `increase_position(trader, position_id, additional_collateral, additional_size)`
-- `decrease_position(trader, position_id, collateral_to_remove, size_to_reduce)`
-- `liquidate_position(keeper, position_id)`
-- `get_position(position_id)`
-- `calculate_pnl(position_id)`
+### 3. LiquidityPool
+**Path**: `contracts/liquidity-pool/`
 
-### 3. MarketManager Contract
+LP deposit/withdrawal and position collateral management.
 
-**Purpose**: Handles market-level operations and state management
+**LP Functions**:
+- `deposit(user, amount)` - Deposit tokens, receive LP shares
+- `withdraw(user, shares)` - Burn shares, withdraw tokens
+- `get_shares(user)` / `get_total_shares()` / `get_total_deposits()`
 
-**Responsibilities**:
-- Initialize and manage perpetual markets (XLM-PERP, BTC-PERP, ETH-PERP)
-- Calculate and update funding rates every 60 seconds
-- Track long and short open interest
-- Enforce open interest caps to control risk
-- Pause/unpause markets for maintenance or risk management
+**Position Collateral Functions** (called by PositionManager):
+- `deposit_position_collateral(position_id, trader, amount)` - Transfer collateral in
+- `withdraw_position_collateral(position_id, trader, amount)` - Transfer collateral out
+- `reserve_liquidity(amount)` / `release_liquidity(amount)` - Reserve pool liquidity for positions
 
-**Initial Markets**:
-1. **XLM-PERP** (Market ID: 0) - Stellar Lumens perpetual
-2. **BTC-PERP** (Market ID: 1) - Bitcoin perpetual
-3. **ETH-PERP** (Market ID: 2) - Ethereum perpetual
+**Share Calculation**:
+- First deposit: shares = amount (1:1)
+- Subsequent: shares = (deposit * total_shares) / pool_value
+
+---
+
+### 4. MarketManager
+**Path**: `contracts/market-manager/`
+
+Market operations, open interest tracking, and funding rates.
+
+**Functions**:
+- `create_market(admin, market_id, max_open_interest, max_funding_rate)` - Create new market
+- `update_funding_rate(market_id)` - Keeper-triggered funding update
+- `update_open_interest(market_id, is_long, size_delta, is_increase)` - Track OI changes
+- `get_funding_rate(market_id)` / `get_cumulative_funding(market_id)`
+- `get_open_interest(market_id)` / `can_open_position(market_id, is_long, size)`
+- `pause_market(admin, market_id)` / `unpause_market(admin, market_id)`
 
 **Funding Rate Mechanism**:
-- Updated every 60 seconds
-- Positive funding: Longs pay shorts (when longs > shorts)
-- Negative funding: Shorts pay longs (when shorts > longs)
-- Rate based on position imbalance and market conditions
-- Capped at maximum funding rate to prevent extreme payments
+- Rate = base_rate * (imbalance_ratio)^2
+- Positive: Longs pay shorts (long OI > short OI)
+- Negative: Shorts pay longs (short OI > long OI)
+- Cumulative tracking for efficient per-position calculation
 
-**Market Pausing**:
-Markets can be paused during:
-- Protocol upgrades or maintenance
-- Oracle failures or price manipulation concerns
-- Extreme market volatility
-- Risk management measures
+---
 
-**Stub Functions** (to be implemented):
-- `create_market(market_id, max_open_interest, max_funding_rate)`
-- `update_funding_rate(market_id)`
-- `get_funding_rate(market_id)`
-- `update_open_interest(market_id, is_long, size_delta)`
-- `get_open_interest(market_id)`
-- `pause_market(market_id)`
-- `unpause_market(market_id)`
-- `is_market_paused(market_id)`
-- `can_open_position(market_id, is_long, size)`
+### 5. OracleIntegrator
+**Path**: `contracts/oracle-integrator/`
 
-### 4. OracleIntegrator Contract
+Price feeds and validation with test mode support.
 
-**Purpose**: Fetches, validates, and aggregates price data from multiple oracle sources
+**Functions**:
+- `get_price(market_id)` - Get current price for market
+- `set_test_mode(admin, enabled)` - Enable/disable test mode
+- `set_fixed_price_mode(admin, enabled)` - Disable price oscillation for deterministic tests
+- `set_test_base_price(admin, market_id, price)` - Set base price in test mode
 
-**Responsibilities**:
-- Query price feeds from Pyth Network, DIA, and Reflector oracles
-- Validate price freshness, bounds, and consistency
-- Calculate median price from multiple sources
-- Detect excessive price deviations between oracles
-- Monitor oracle health and availability
-- Provide fallback logic for oracle failures
+**Test Mode**:
+- Simulates +/-10% price oscillation per hour (sawtooth pattern)
+- Use `set_fixed_price_mode(true)` for deterministic test prices
+- Prices use 1e7 scaling (1.00 USD = 10,000,000)
 
-**Oracle Sources**:
-1. **Pyth Network** (Primary) - High-frequency updates, sub-second latency
-2. **DIA Oracle** (Secondary) - Transparent data sourcing, customizable feeds
-3. **Reflector Oracle** (Tertiary) - Stellar-native, community-driven
+---
 
-**Price Aggregation Strategy**:
-- Fetch prices from all available oracles
-- Validate each price (timestamp freshness, bounds check)
-- Calculate median of valid prices
-- Flag deviations >5% from median
-- Require minimum 2 valid sources for trading
+### 6. FaucetToken
+**Path**: `contracts/faucet-token/`
 
-**Price Validation Rules**:
-- Staleness check: Reject prices older than 60 seconds
-- Deviation threshold: Alert if sources differ by >5%
-- Circuit breaker: Pause market if price moves >20% in single update
-- Confidence intervals: Use Pyth confidence data for quality assessment
+SEP-41 compliant test token with unlimited minting (testnet only).
 
-**Stub Functions** (to be implemented):
-- `get_price(asset_id)` - Get aggregated median price
-- `fetch_pyth_price(asset_id)` - Query Pyth Network
-- `fetch_dia_price(asset_id)` - Query DIA oracle
-- `fetch_reflector_price(asset_id)` - Query Reflector oracle
-- `validate_price(price, timestamp, min_price, max_price)`
-- `calculate_median()` - Calculate median from price array
-- `check_price_deviation(threshold_bps)` - Check if deviation is acceptable
-- `get_oracle_health()` - Get health status of all oracles
-- `update_cached_price(asset_id)` - Update cached price
+**Functions**:
+- `initialize(admin, name, symbol, decimals)` - Initialize token
+- `mint(to, amount)` - Public minting (anyone can mint)
+- Standard token interface: `transfer()`, `approve()`, `balance_of()`, `total_supply()`
 
-### 5. ConfigManager Contract
+## Contract Dependencies
 
-**Purpose**: Centralized configuration store for all protocol parameters
+```
+position-manager
+  |-- config-manager (addresses & config)
+  |-- liquidity-pool (collateral transfers)
+  |-- market-manager (OI, funding rates)
+  +-- oracle-integrator (prices)
 
-**Responsibilities**:
-- Store all protocol configuration parameters
-- Provide read-only access to all contracts
-- Restrict parameter updates to authorized administrators
-- Validate parameter values and consistency
-- Manage admin access control
-
-**Configuration Categories**:
-
-**Trading Parameters**:
-- `MIN_LEVERAGE`: 5x (minimum allowed leverage)
-- `MAX_LEVERAGE`: 20x (maximum allowed leverage)
-- `MIN_POSITION_SIZE`: 10 USD (minimum position size)
-
-**Fee Configuration** (in basis points):
-- `MAKER_FEE_BPS`: 2 (0.02% for limit orders)
-- `TAKER_FEE_BPS`: 5 (0.05% for market orders)
-- `LIQUIDATION_FEE_BPS`: 50 (0.5% paid to liquidators)
-
-**Risk Parameters**:
-- `LIQUIDATION_THRESHOLD`: 9000 (90% - margin ratio triggering liquidation)
-- `MAINTENANCE_MARGIN`: 5000 (50% - minimum margin to maintain position)
-- `MAX_PRICE_DEVIATION_BPS`: 500 (5% - max deviation between oracles)
-
-**Time Parameters**:
-- `FUNDING_INTERVAL`: 60 seconds (time between funding rate updates)
-- `PRICE_STALENESS_THRESHOLD`: 60 seconds (maximum age of oracle price)
-
-**Implemented Functions**:
-- `initialize(admin)` - Initialize contract with admin and defaults
-- `set_config(admin, key, value)` - Set configuration parameter (admin only)
-- `get_config(key)` - Get configuration parameter value
-- `get_time_config(key)` - Get time-based configuration parameter
-- `set_admin(current_admin, new_admin)` - Transfer admin role
-- `get_admin()` - Get current admin address
-- `get_min_leverage()` - Get minimum leverage limit
-- `get_max_leverage()` - Get maximum leverage limit
-- `get_maker_fee()` - Get maker fee in basis points
-- `get_taker_fee()` - Get taker fee in basis points
-- `get_liquidation_threshold()` - Get liquidation threshold
+liquidity-pool, market-manager, oracle-integrator
+  +-- config-manager
+```
 
 ## Project Structure
 
-```text
-.
+```
+contracts/
 ├── contracts/
-│   ├── liquidity-pool/           # LP deposit/withdrawal, share management
-│   ├── position-manager/         # Position lifecycle management
-│   ├── market-manager/           # Market operations, funding rates
-│   ├── oracle-integrator/        # Multi-oracle price aggregation
-│   └── config-manager/           # Protocol configuration storage
-├── Stellars Finance - Technical Architecture.pdf
-├── Cargo.toml                    # Workspace configuration
+│   ├── config-manager/      # Protocol configuration & registry
+│   ├── position-manager/    # Position & order management
+│   ├── liquidity-pool/      # LP deposits & collateral
+│   ├── market-manager/      # Markets & funding rates
+│   ├── oracle-integrator/   # Price feeds
+│   └── faucet-token/        # Test token
+├── tests/                   # E2E integration tests
+│   ├── common/              # Test helpers & setup
+│   └── scenarios/           # Test scenarios
+├── Cargo.toml               # Workspace configuration
 └── README.md
 ```
 
-## Storage Strategies
-
-Different contracts use different storage types based on access patterns:
-
-- **Persistent Storage** (LiquidityPool, PositionManager): Data that must survive contract upgrades (positions, balances)
-- **Instance Storage** (MarketManager, ConfigManager): Frequently accessed configuration and market state
-- **Temporary Storage** (OracleIntegrator): Short-lived cached data with TTL (prices updated frequently)
-
-## Key Features
-
-### Leverage System
-- Minimum leverage: 5x
-- Maximum leverage: 20x
-- Leverage determines position size relative to collateral
-- Higher leverage = higher potential returns but also higher liquidation risk
-
-### Liquidation Mechanism
-- Positions liquidatable when margin ratio < 90%
-- Keepers incentivized with liquidation fees (0.5% of collateral)
-- Liquidation price calculated based on entry price, leverage, and funding
-- Partial liquidations via ADL for large positions
-
-### Funding Rates
-- Updated every 60 seconds by keeper bots
-- Balances long/short positions to maintain market equilibrium
-- Continuously accrued and settled on position close or liquidation
-- Capped at maximum rate to prevent extreme payments
-
-### LP Share Mechanism
-- LPs deposit tokens and receive shares proportional to pool value
-- Shares represent claim on pool assets
-- Pool value fluctuates based on trader PnL:
-  - Traders lose → Pool value increases → LPs profit
-  - Traders win → Pool value decreases → LPs take losses
-- LPs earn trading fees as compensation for providing liquidity
-
 ## Building and Testing
 
-### Prerequisites
-- Rust toolchain
-- Soroban CLI (`cargo install soroban-cli`)
-- Stellar account for deployment
-
-### Build All Contracts
-
+### Build Contracts
 ```bash
-cargo build --release --target wasm32-unknown-unknown
+# From repo root
+npm run build:contracts
+
+# Or directly with cargo
+cargo build --release --target wasm32v1-none
 ```
 
 ### Run Tests
-
 ```bash
-# Test all contracts
-cargo test
+# All tests
+npm run test:contracts
 
-# Test specific contract
-cargo test -p liquidity-pool
+# Unit tests only (faster)
+npm run test:unit
+
+# E2E tests only
+npm run test:e2e
+```
+
+### Test a Specific Contract
+```bash
 cargo test -p config-manager
+cargo test -p position-manager
+cargo test -p liquidity-pool
+cargo test -p market-manager
+cargo test -p oracle-integrator
 ```
 
-### Run Specific Contract Tests
+## Storage Patterns
 
-```bash
-cd contracts/liquidity-pool
-cargo test
+| Contract | Persistent | Instance |
+|----------|-----------|----------|
+| config-manager | - | All config & registry |
+| position-manager | Positions, Orders | IDs, ConfigMgr address |
+| liquidity-pool | Shares, Collateral per position | Totals, ConfigMgr address |
+| market-manager | - | Markets, Admin |
+| oracle-integrator | - | Test mode prices |
 
-cd contracts/config-manager
-cargo test
-```
+## Key Implementation Details
 
-## Development Status
+- **Price scaling**: All prices use 1e7 scaling (1.00 USD = 10,000,000)
+- **Position/Order IDs**: Start at 1 (0 means "no position" in order references)
+- **Funding tracking**: Cumulative (bps * seconds) for efficient per-position calculation
+- **Order TTL**: ~14 days (100,000 ledgers), extended on interaction
+- **Slippage protection**: Orders have `acceptable_price` field (0 = no limit)
 
-**Completed**:
-- ✅ LiquidityPool contract with deposit/withdraw functionality
-- ✅ ConfigManager contract with get/set configuration
-- ✅ Basic test coverage for implemented features
-- ✅ Contract structure and comprehensive documentation
-
-**To Be Implemented**:
-- ⏳ PositionManager: Position lifecycle (open, close, modify, liquidate)
-- ⏳ MarketManager: Funding rate calculations and OI tracking
-- ⏳ OracleIntegrator: Multi-oracle integration and price aggregation
-- ⏳ Order execution engine (market, limit, stop-loss, take-profit)
-- ⏳ Cross-contract integration
-- ⏳ Keeper bot service
-- ⏳ Backend indexer and API
-- ⏳ Frontend application
-
-## Additional Resources
+## Resources
 
 - **Soroban Documentation**: https://developers.stellar.org/docs/build/smart-contracts
 - **Soroban SDK**: https://docs.rs/soroban-sdk/latest/soroban_sdk/
-- **Technical Architecture**: See `Stellars Finance - Technical Architecture.pdf` for detailed specifications
-
-## License
-
-See project license details.

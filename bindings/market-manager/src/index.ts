@@ -34,16 +34,62 @@ if (typeof window !== 'undefined') {
 
 
 
+export interface Market {
+  base_funding_rate: i128;
+  cumulative_funding_long: i128;
+  cumulative_funding_short: i128;
+  funding_rate: i128;
+  is_paused: boolean;
+  last_funding_update: u64;
+  long_open_interest: u128;
+  market_id: u32;
+  max_funding_rate: i128;
+  max_open_interest: u128;
+  short_open_interest: u128;
+}
+
+export type DataKey = {tag: "ConfigManager", values: void} | {tag: "Admin", values: void} | {tag: "Market", values: readonly [u32]} | {tag: "MarketCount", values: void} | {tag: "AuthorizedPositionManager", values: void};
+
+
+
+
 export interface Client {
+  /**
+   * Construct and simulate a initialize transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Initialize the MarketManager contract.
+   * 
+   * # Arguments
+   * 
+   * * `config_manager` - Address of the ConfigManager contract
+   * * `admin` - Address of the admin
+   */
+  initialize: ({config_manager, admin}: {config_manager: string, admin: string}, options?: {
+    /**
+     * The fee to pay for the transaction. Default: BASE_FEE
+     */
+    fee?: number;
+
+    /**
+     * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+     */
+    timeoutInSeconds?: number;
+
+    /**
+     * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+     */
+    simulate?: boolean;
+  }) => Promise<AssembledTransaction<null>>
+
   /**
    * Construct and simulate a pause_market transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Pause a market to prevent new positions from being opened.
    * 
    * # Arguments
    * 
+   * * `admin` - Address of the admin
    * * `market_id` - The market identifier
    */
-  pause_market: ({market_id}: {market_id: u32}, options?: {
+  pause_market: ({admin, market_id}: {admin: string, market_id: u32}, options?: {
     /**
      * The fee to pay for the transaction. Default: BASE_FEE
      */
@@ -62,15 +108,16 @@ export interface Client {
 
   /**
    * Construct and simulate a create_market transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Initialize a new perpetual market.
+   * Create a new perpetual market.
    * 
    * # Arguments
    * 
+   * * `admin` - Address of the admin
    * * `market_id` - Unique identifier for the market (e.g., 0 = XLM-PERP)
    * * `max_open_interest` - Maximum total open interest allowed for this market
    * * `max_funding_rate` - Maximum funding rate per hour (in basis points)
    */
-  create_market: ({market_id, max_open_interest, max_funding_rate}: {market_id: u32, max_open_interest: i128, max_funding_rate: i128}, options?: {
+  create_market: ({admin, market_id, max_open_interest, max_funding_rate}: {admin: string, market_id: u32, max_open_interest: u128, max_funding_rate: i128}, options?: {
     /**
      * The fee to pay for the transaction. Default: BASE_FEE
      */
@@ -93,9 +140,10 @@ export interface Client {
    * 
    * # Arguments
    * 
+   * * `admin` - Address of the admin
    * * `market_id` - The market identifier
    */
-  unpause_market: ({market_id}: {market_id: u32}, options?: {
+  unpause_market: ({admin, market_id}: {admin: string, market_id: u32}, options?: {
     /**
      * The fee to pay for the transaction. Default: BASE_FEE
      */
@@ -184,7 +232,7 @@ export interface Client {
    * 
    * True if position can be opened, false otherwise
    */
-  can_open_position: ({market_id, is_long, size}: {market_id: u32, is_long: boolean, size: i128}, options?: {
+  can_open_position: ({market_id, is_long, size}: {market_id: u32, is_long: boolean, size: u128}, options?: {
     /**
      * The fee to pay for the transaction. Default: BASE_FEE
      */
@@ -228,19 +276,48 @@ export interface Client {
      * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
      */
     simulate?: boolean;
-  }) => Promise<AssembledTransaction<readonly [i128, i128]>>
+  }) => Promise<AssembledTransaction<readonly [u128, u128]>>
 
   /**
    * Construct and simulate a update_funding_rate transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Update the funding rate for a market.
    * 
    * Called every 60 seconds by the keeper bot.
+   * Calculates funding rate based on market imbalance and updates cumulative funding.
+   * Funding rate is expressed in basis points per hour.
    * 
    * # Arguments
    * 
+   * * `caller` - Address calling this function
    * * `market_id` - The market identifier
    */
-  update_funding_rate: ({market_id}: {market_id: u32}, options?: {
+  update_funding_rate: ({caller, market_id}: {caller: string, market_id: u32}, options?: {
+    /**
+     * The fee to pay for the transaction. Default: BASE_FEE
+     */
+    fee?: number;
+
+    /**
+     * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+     */
+    timeoutInSeconds?: number;
+
+    /**
+     * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+     */
+    simulate?: boolean;
+  }) => Promise<AssembledTransaction<null>>
+
+  /**
+   * Construct and simulate a set_position_manager transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Set the authorized PositionManager contract.
+   * 
+   * # Arguments
+   * 
+   * * `admin` - Address of the admin
+   * * `position_manager` - Address of the PositionManager contract
+   */
+  set_position_manager: ({admin, position_manager}: {admin: string, position_manager: string}, options?: {
     /**
      * The fee to pay for the transaction. Default: BASE_FEE
      */
@@ -263,11 +340,12 @@ export interface Client {
    * 
    * # Arguments
    * 
+   * * `position_manager` - Address of the PositionManager contract
    * * `market_id` - The market identifier
    * * `is_long` - True if long position, false if short
    * * `size_delta` - Change in position size (positive = increase, negative = decrease)
    */
-  update_open_interest: ({market_id, is_long, size_delta}: {market_id: u32, is_long: boolean, size_delta: i128}, options?: {
+  update_open_interest: ({position_manager, market_id, is_long, size_delta}: {position_manager: string, market_id: u32, is_long: boolean, size_delta: i128}, options?: {
     /**
      * The fee to pay for the transaction. Default: BASE_FEE
      */
@@ -283,6 +361,36 @@ export interface Client {
      */
     simulate?: boolean;
   }) => Promise<AssembledTransaction<null>>
+
+  /**
+   * Construct and simulate a get_cumulative_funding transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Get cumulative funding for a position side.
+   * 
+   * # Arguments
+   * 
+   * * `market_id` - The market identifier
+   * * `is_long` - True if long position, false if short
+   * 
+   * # Returns
+   * 
+   * The cumulative funding paid by the specified side
+   */
+  get_cumulative_funding: ({market_id, is_long}: {market_id: u32, is_long: boolean}, options?: {
+    /**
+     * The fee to pay for the transaction. Default: BASE_FEE
+     */
+    fee?: number;
+
+    /**
+     * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+     */
+    timeoutInSeconds?: number;
+
+    /**
+     * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+     */
+    simulate?: boolean;
+  }) => Promise<AssembledTransaction<i128>>
 
 }
 export class Client extends ContractClient {
@@ -302,27 +410,38 @@ export class Client extends ContractClient {
   }
   constructor(public readonly options: ContractClientOptions) {
     super(
-      new ContractSpec([ "AAAAAAAAAG5QYXVzZSBhIG1hcmtldCB0byBwcmV2ZW50IG5ldyBwb3NpdGlvbnMgZnJvbSBiZWluZyBvcGVuZWQuCgojIEFyZ3VtZW50cwoKKiBgbWFya2V0X2lkYCAtIFRoZSBtYXJrZXQgaWRlbnRpZmllcgAAAAAADHBhdXNlX21hcmtldAAAAAEAAAAAAAAACW1hcmtldF9pZAAAAAAAAAQAAAAA",
-        "AAAAAAAAAQlJbml0aWFsaXplIGEgbmV3IHBlcnBldHVhbCBtYXJrZXQuCgojIEFyZ3VtZW50cwoKKiBgbWFya2V0X2lkYCAtIFVuaXF1ZSBpZGVudGlmaWVyIGZvciB0aGUgbWFya2V0IChlLmcuLCAwID0gWExNLVBFUlApCiogYG1heF9vcGVuX2ludGVyZXN0YCAtIE1heGltdW0gdG90YWwgb3BlbiBpbnRlcmVzdCBhbGxvd2VkIGZvciB0aGlzIG1hcmtldAoqIGBtYXhfZnVuZGluZ19yYXRlYCAtIE1heGltdW0gZnVuZGluZyByYXRlIHBlciBob3VyIChpbiBiYXNpcyBwb2ludHMpAAAAAAAADWNyZWF0ZV9tYXJrZXQAAAAAAAADAAAAAAAAAAltYXJrZXRfaWQAAAAAAAAEAAAAAAAAABFtYXhfb3Blbl9pbnRlcmVzdAAAAAAAAAsAAAAAAAAAEG1heF9mdW5kaW5nX3JhdGUAAAALAAAAAA==",
-        "AAAAAAAAAFxVbnBhdXNlIGEgbWFya2V0IHRvIGFsbG93IG5ldyBwb3NpdGlvbnMuCgojIEFyZ3VtZW50cwoKKiBgbWFya2V0X2lkYCAtIFRoZSBtYXJrZXQgaWRlbnRpZmllcgAAAA51bnBhdXNlX21hcmtldAAAAAAAAQAAAAAAAAAJbWFya2V0X2lkAAAAAAAABAAAAAA=",
+      new ContractSpec([ "AAAAAQAAAAAAAAAAAAAABk1hcmtldAAAAAAACwAAAAAAAAARYmFzZV9mdW5kaW5nX3JhdGUAAAAAAAALAAAAAAAAABdjdW11bGF0aXZlX2Z1bmRpbmdfbG9uZwAAAAALAAAAAAAAABhjdW11bGF0aXZlX2Z1bmRpbmdfc2hvcnQAAAALAAAAAAAAAAxmdW5kaW5nX3JhdGUAAAALAAAAAAAAAAlpc19wYXVzZWQAAAAAAAABAAAAAAAAABNsYXN0X2Z1bmRpbmdfdXBkYXRlAAAAAAYAAAAAAAAAEmxvbmdfb3Blbl9pbnRlcmVzdAAAAAAACgAAAAAAAAAJbWFya2V0X2lkAAAAAAAABAAAAAAAAAAQbWF4X2Z1bmRpbmdfcmF0ZQAAAAsAAAAAAAAAEW1heF9vcGVuX2ludGVyZXN0AAAAAAAACgAAAAAAAAATc2hvcnRfb3Blbl9pbnRlcmVzdAAAAAAK",
+        "AAAAAgAAAAAAAAAAAAAAB0RhdGFLZXkAAAAABQAAAAAAAAAAAAAADUNvbmZpZ01hbmFnZXIAAAAAAAAAAAAAAAAAAAVBZG1pbgAAAAAAAAEAAAAAAAAABk1hcmtldAAAAAAAAQAAAAQAAAAAAAAAAAAAAAtNYXJrZXRDb3VudAAAAAAAAAAAAAAAABlBdXRob3JpemVkUG9zaXRpb25NYW5hZ2VyAAAA",
+        "AAAABQAAAAAAAAAAAAAADk9JVXBkYXRlZEV2ZW50AAAAAAABAAAAEG9pX3VwZGF0ZWRfZXZlbnQAAAADAAAAAAAAAAltYXJrZXRfaWQAAAAAAAAEAAAAAAAAAAAAAAAHbG9uZ19vaQAAAAAKAAAAAAAAAAAAAAAIc2hvcnRfb2kAAAAKAAAAAAAAAAI=",
+        "AAAAAAAAAJBJbml0aWFsaXplIHRoZSBNYXJrZXRNYW5hZ2VyIGNvbnRyYWN0LgoKIyBBcmd1bWVudHMKCiogYGNvbmZpZ19tYW5hZ2VyYCAtIEFkZHJlc3Mgb2YgdGhlIENvbmZpZ01hbmFnZXIgY29udHJhY3QKKiBgYWRtaW5gIC0gQWRkcmVzcyBvZiB0aGUgYWRtaW4AAAAKaW5pdGlhbGl6ZQAAAAAAAgAAAAAAAAAOY29uZmlnX21hbmFnZXIAAAAAABMAAAAAAAAABWFkbWluAAAAAAAAEwAAAAA=",
+        "AAAAAAAAAI9QYXVzZSBhIG1hcmtldCB0byBwcmV2ZW50IG5ldyBwb3NpdGlvbnMgZnJvbSBiZWluZyBvcGVuZWQuCgojIEFyZ3VtZW50cwoKKiBgYWRtaW5gIC0gQWRkcmVzcyBvZiB0aGUgYWRtaW4KKiBgbWFya2V0X2lkYCAtIFRoZSBtYXJrZXQgaWRlbnRpZmllcgAAAAAMcGF1c2VfbWFya2V0AAAAAgAAAAAAAAAFYWRtaW4AAAAAAAATAAAAAAAAAAltYXJrZXRfaWQAAAAAAAAEAAAAAA==",
+        "AAAABQAAAAAAAAAAAAAAEk1hcmtldENyZWF0ZWRFdmVudAAAAAAAAQAAABRtYXJrZXRfY3JlYXRlZF9ldmVudAAAAAIAAAAAAAAACW1hcmtldF9pZAAAAAAAAAQAAAAAAAAAAAAAAAZtYXhfb2kAAAAAAAoAAAAAAAAAAg==",
+        "AAAAAAAAASZDcmVhdGUgYSBuZXcgcGVycGV0dWFsIG1hcmtldC4KCiMgQXJndW1lbnRzCgoqIGBhZG1pbmAgLSBBZGRyZXNzIG9mIHRoZSBhZG1pbgoqIGBtYXJrZXRfaWRgIC0gVW5pcXVlIGlkZW50aWZpZXIgZm9yIHRoZSBtYXJrZXQgKGUuZy4sIDAgPSBYTE0tUEVSUCkKKiBgbWF4X29wZW5faW50ZXJlc3RgIC0gTWF4aW11bSB0b3RhbCBvcGVuIGludGVyZXN0IGFsbG93ZWQgZm9yIHRoaXMgbWFya2V0CiogYG1heF9mdW5kaW5nX3JhdGVgIC0gTWF4aW11bSBmdW5kaW5nIHJhdGUgcGVyIGhvdXIgKGluIGJhc2lzIHBvaW50cykAAAAAAA1jcmVhdGVfbWFya2V0AAAAAAAABAAAAAAAAAAFYWRtaW4AAAAAAAATAAAAAAAAAAltYXJrZXRfaWQAAAAAAAAEAAAAAAAAABFtYXhfb3Blbl9pbnRlcmVzdAAAAAAAAAoAAAAAAAAAEG1heF9mdW5kaW5nX3JhdGUAAAALAAAAAA==",
+        "AAAAAAAAAH1VbnBhdXNlIGEgbWFya2V0IHRvIGFsbG93IG5ldyBwb3NpdGlvbnMuCgojIEFyZ3VtZW50cwoKKiBgYWRtaW5gIC0gQWRkcmVzcyBvZiB0aGUgYWRtaW4KKiBgbWFya2V0X2lkYCAtIFRoZSBtYXJrZXQgaWRlbnRpZmllcgAAAAAAAA51bnBhdXNlX21hcmtldAAAAAAAAgAAAAAAAAAFYWRtaW4AAAAAAAATAAAAAAAAAAltYXJrZXRfaWQAAAAAAAAEAAAAAA==",
         "AAAAAAAAAJ5HZXQgdGhlIGN1cnJlbnQgZnVuZGluZyByYXRlIGZvciBhIG1hcmtldC4KCiMgQXJndW1lbnRzCgoqIGBtYXJrZXRfaWRgIC0gVGhlIG1hcmtldCBpZGVudGlmaWVyCgojIFJldHVybnMKClRoZSBjdXJyZW50IGZ1bmRpbmcgcmF0ZSAoaW4gYmFzaXMgcG9pbnRzIHBlciBob3VyKQAAAAAAEGdldF9mdW5kaW5nX3JhdGUAAAABAAAAAAAAAAltYXJrZXRfaWQAAAAAAAAEAAAAAQAAAAs=",
         "AAAAAAAAAJBDaGVjayBpZiBhIG1hcmtldCBpcyBjdXJyZW50bHkgcGF1c2VkLgoKIyBBcmd1bWVudHMKCiogYG1hcmtldF9pZGAgLSBUaGUgbWFya2V0IGlkZW50aWZpZXIKCiMgUmV0dXJucwoKVHJ1ZSBpZiBtYXJrZXQgaXMgcGF1c2VkLCBmYWxzZSBvdGhlcndpc2UAAAAQaXNfbWFya2V0X3BhdXNlZAAAAAEAAAAAAAAACW1hcmtldF9pZAAAAAAAAAQAAAABAAAAAQ==",
-        "AAAAAAAAAQlDaGVjayBpZiBhIG5ldyBwb3NpdGlvbiBjYW4gYmUgb3BlbmVkIGJhc2VkIG9uIE9JIGxpbWl0cy4KCiMgQXJndW1lbnRzCgoqIGBtYXJrZXRfaWRgIC0gVGhlIG1hcmtldCBpZGVudGlmaWVyCiogYGlzX2xvbmdgIC0gVHJ1ZSBpZiBsb25nIHBvc2l0aW9uLCBmYWxzZSBpZiBzaG9ydAoqIGBzaXplYCAtIFRoZSBzaXplIG9mIHRoZSBwb3NpdGlvbiB0byBvcGVuCgojIFJldHVybnMKClRydWUgaWYgcG9zaXRpb24gY2FuIGJlIG9wZW5lZCwgZmFsc2Ugb3RoZXJ3aXNlAAAAAAAAEWNhbl9vcGVuX3Bvc2l0aW9uAAAAAAAAAwAAAAAAAAAJbWFya2V0X2lkAAAAAAAABAAAAAAAAAAHaXNfbG9uZwAAAAABAAAAAAAAAARzaXplAAAACwAAAAEAAAAB",
-        "AAAAAAAAAJ5HZXQgdGhlIGN1cnJlbnQgb3BlbiBpbnRlcmVzdCBmb3IgYSBtYXJrZXQuCgojIEFyZ3VtZW50cwoKKiBgbWFya2V0X2lkYCAtIFRoZSBtYXJrZXQgaWRlbnRpZmllcgoKIyBSZXR1cm5zCgpUdXBsZSBvZiAobG9uZ19vcGVuX2ludGVyZXN0LCBzaG9ydF9vcGVuX2ludGVyZXN0KQAAAAAAEWdldF9vcGVuX2ludGVyZXN0AAAAAAAAAQAAAAAAAAAJbWFya2V0X2lkAAAAAAAABAAAAAEAAAPtAAAAAgAAAAsAAAAL",
-        "AAAAAAAAAIVVcGRhdGUgdGhlIGZ1bmRpbmcgcmF0ZSBmb3IgYSBtYXJrZXQuCgpDYWxsZWQgZXZlcnkgNjAgc2Vjb25kcyBieSB0aGUga2VlcGVyIGJvdC4KCiMgQXJndW1lbnRzCgoqIGBtYXJrZXRfaWRgIC0gVGhlIG1hcmtldCBpZGVudGlmaWVyAAAAAAAAE3VwZGF0ZV9mdW5kaW5nX3JhdGUAAAAAAQAAAAAAAAAJbWFya2V0X2lkAAAAAAAABAAAAAA=",
-        "AAAAAAAAAPVVcGRhdGUgb3BlbiBpbnRlcmVzdCB3aGVuIHBvc2l0aW9ucyBhcmUgb3BlbmVkIG9yIGNsb3NlZC4KCiMgQXJndW1lbnRzCgoqIGBtYXJrZXRfaWRgIC0gVGhlIG1hcmtldCBpZGVudGlmaWVyCiogYGlzX2xvbmdgIC0gVHJ1ZSBpZiBsb25nIHBvc2l0aW9uLCBmYWxzZSBpZiBzaG9ydAoqIGBzaXplX2RlbHRhYCAtIENoYW5nZSBpbiBwb3NpdGlvbiBzaXplIChwb3NpdGl2ZSA9IGluY3JlYXNlLCBuZWdhdGl2ZSA9IGRlY3JlYXNlKQAAAAAAABR1cGRhdGVfb3Blbl9pbnRlcmVzdAAAAAMAAAAAAAAACW1hcmtldF9pZAAAAAAAAAQAAAAAAAAAB2lzX2xvbmcAAAAAAQAAAAAAAAAKc2l6ZV9kZWx0YQAAAAAACwAAAAA=" ]),
+        "AAAAAAAAAQlDaGVjayBpZiBhIG5ldyBwb3NpdGlvbiBjYW4gYmUgb3BlbmVkIGJhc2VkIG9uIE9JIGxpbWl0cy4KCiMgQXJndW1lbnRzCgoqIGBtYXJrZXRfaWRgIC0gVGhlIG1hcmtldCBpZGVudGlmaWVyCiogYGlzX2xvbmdgIC0gVHJ1ZSBpZiBsb25nIHBvc2l0aW9uLCBmYWxzZSBpZiBzaG9ydAoqIGBzaXplYCAtIFRoZSBzaXplIG9mIHRoZSBwb3NpdGlvbiB0byBvcGVuCgojIFJldHVybnMKClRydWUgaWYgcG9zaXRpb24gY2FuIGJlIG9wZW5lZCwgZmFsc2Ugb3RoZXJ3aXNlAAAAAAAAEWNhbl9vcGVuX3Bvc2l0aW9uAAAAAAAAAwAAAAAAAAAJbWFya2V0X2lkAAAAAAAABAAAAAAAAAAHaXNfbG9uZwAAAAABAAAAAAAAAARzaXplAAAACgAAAAEAAAAB",
+        "AAAAAAAAAJ5HZXQgdGhlIGN1cnJlbnQgb3BlbiBpbnRlcmVzdCBmb3IgYSBtYXJrZXQuCgojIEFyZ3VtZW50cwoKKiBgbWFya2V0X2lkYCAtIFRoZSBtYXJrZXQgaWRlbnRpZmllcgoKIyBSZXR1cm5zCgpUdXBsZSBvZiAobG9uZ19vcGVuX2ludGVyZXN0LCBzaG9ydF9vcGVuX2ludGVyZXN0KQAAAAAAEWdldF9vcGVuX2ludGVyZXN0AAAAAAAAAQAAAAAAAAAJbWFya2V0X2lkAAAAAAAABAAAAAEAAAPtAAAAAgAAAAoAAAAK",
+        "AAAABQAAAAAAAAAAAAAAF0Z1bmRpbmdSYXRlVXBkYXRlZEV2ZW50AAAAAAEAAAAaZnVuZGluZ19yYXRlX3VwZGF0ZWRfZXZlbnQAAAAAAAQAAAAAAAAACW1hcmtldF9pZAAAAAAAAAQAAAAAAAAAAAAAAAxmdW5kaW5nX3JhdGUAAAALAAAAAAAAAAAAAAAHbG9uZ19vaQAAAAAKAAAAAAAAAAAAAAAIc2hvcnRfb2kAAAAKAAAAAAAAAAI=",
+        "AAAAAAAAATZVcGRhdGUgdGhlIGZ1bmRpbmcgcmF0ZSBmb3IgYSBtYXJrZXQuCgpDYWxsZWQgZXZlcnkgNjAgc2Vjb25kcyBieSB0aGUga2VlcGVyIGJvdC4KQ2FsY3VsYXRlcyBmdW5kaW5nIHJhdGUgYmFzZWQgb24gbWFya2V0IGltYmFsYW5jZSBhbmQgdXBkYXRlcyBjdW11bGF0aXZlIGZ1bmRpbmcuCkZ1bmRpbmcgcmF0ZSBpcyBleHByZXNzZWQgaW4gYmFzaXMgcG9pbnRzIHBlciBob3VyLgoKIyBBcmd1bWVudHMKCiogYGNhbGxlcmAgLSBBZGRyZXNzIGNhbGxpbmcgdGhpcyBmdW5jdGlvbgoqIGBtYXJrZXRfaWRgIC0gVGhlIG1hcmtldCBpZGVudGlmaWVyAAAAAAATdXBkYXRlX2Z1bmRpbmdfcmF0ZQAAAAACAAAAAAAAAAZjYWxsZXIAAAAAABMAAAAAAAAACW1hcmtldF9pZAAAAAAAAAQAAAAA",
+        "AAAAAAAAAJpTZXQgdGhlIGF1dGhvcml6ZWQgUG9zaXRpb25NYW5hZ2VyIGNvbnRyYWN0LgoKIyBBcmd1bWVudHMKCiogYGFkbWluYCAtIEFkZHJlc3Mgb2YgdGhlIGFkbWluCiogYHBvc2l0aW9uX21hbmFnZXJgIC0gQWRkcmVzcyBvZiB0aGUgUG9zaXRpb25NYW5hZ2VyIGNvbnRyYWN0AAAAAAAUc2V0X3Bvc2l0aW9uX21hbmFnZXIAAAACAAAAAAAAAAVhZG1pbgAAAAAAABMAAAAAAAAAEHBvc2l0aW9uX21hbmFnZXIAAAATAAAAAA==",
+        "AAAAAAAAATRVcGRhdGUgb3BlbiBpbnRlcmVzdCB3aGVuIHBvc2l0aW9ucyBhcmUgb3BlbmVkIG9yIGNsb3NlZC4KCiMgQXJndW1lbnRzCgoqIGBwb3NpdGlvbl9tYW5hZ2VyYCAtIEFkZHJlc3Mgb2YgdGhlIFBvc2l0aW9uTWFuYWdlciBjb250cmFjdAoqIGBtYXJrZXRfaWRgIC0gVGhlIG1hcmtldCBpZGVudGlmaWVyCiogYGlzX2xvbmdgIC0gVHJ1ZSBpZiBsb25nIHBvc2l0aW9uLCBmYWxzZSBpZiBzaG9ydAoqIGBzaXplX2RlbHRhYCAtIENoYW5nZSBpbiBwb3NpdGlvbiBzaXplIChwb3NpdGl2ZSA9IGluY3JlYXNlLCBuZWdhdGl2ZSA9IGRlY3JlYXNlKQAAABR1cGRhdGVfb3Blbl9pbnRlcmVzdAAAAAQAAAAAAAAAEHBvc2l0aW9uX21hbmFnZXIAAAATAAAAAAAAAAltYXJrZXRfaWQAAAAAAAAEAAAAAAAAAAdpc19sb25nAAAAAAEAAAAAAAAACnNpemVfZGVsdGEAAAAAAAsAAAAA",
+        "AAAAAAAAANFHZXQgY3VtdWxhdGl2ZSBmdW5kaW5nIGZvciBhIHBvc2l0aW9uIHNpZGUuCgojIEFyZ3VtZW50cwoKKiBgbWFya2V0X2lkYCAtIFRoZSBtYXJrZXQgaWRlbnRpZmllcgoqIGBpc19sb25nYCAtIFRydWUgaWYgbG9uZyBwb3NpdGlvbiwgZmFsc2UgaWYgc2hvcnQKCiMgUmV0dXJucwoKVGhlIGN1bXVsYXRpdmUgZnVuZGluZyBwYWlkIGJ5IHRoZSBzcGVjaWZpZWQgc2lkZQAAAAAAABZnZXRfY3VtdWxhdGl2ZV9mdW5kaW5nAAAAAAACAAAAAAAAAAltYXJrZXRfaWQAAAAAAAAEAAAAAAAAAAdpc19sb25nAAAAAAEAAAABAAAACw==" ]),
       options
     )
   }
   public readonly fromJSON = {
-    pause_market: this.txFromJSON<null>,
+    initialize: this.txFromJSON<null>,
+        pause_market: this.txFromJSON<null>,
         create_market: this.txFromJSON<null>,
         unpause_market: this.txFromJSON<null>,
         get_funding_rate: this.txFromJSON<i128>,
         is_market_paused: this.txFromJSON<boolean>,
         can_open_position: this.txFromJSON<boolean>,
-        get_open_interest: this.txFromJSON<readonly [i128, i128]>,
+        get_open_interest: this.txFromJSON<readonly [u128, u128]>,
         update_funding_rate: this.txFromJSON<null>,
-        update_open_interest: this.txFromJSON<null>
+        set_position_manager: this.txFromJSON<null>,
+        update_open_interest: this.txFromJSON<null>,
+        get_cumulative_funding: this.txFromJSON<i128>
   }
 }

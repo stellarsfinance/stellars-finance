@@ -86,6 +86,13 @@ pub fn setup_test_environment<'a>(
     let oracle_client = oracle_integrator::Client::new(env, &oracle_id);
     oracle_client.initialize(&config_manager_id);
 
+    // Enable test mode with simulated prices
+    let mut base_prices = soroban_sdk::Map::new(env);
+    base_prices.set(0u32, 100_000_000i128);        // XLM: $0.10
+    base_prices.set(1u32, 50_000_000_000_000i128); // BTC: $50,000
+    base_prices.set(2u32, 3_000_000_000_000i128);  // ETH: $3,000
+    oracle_client.set_test_mode(&admin, &true, &base_prices);
+
     // Deploy MarketManager
     let market_manager_id = env.register(market_manager::WASM, ());
     let market_client = market_manager::Client::new(env, &market_manager_id);
@@ -94,12 +101,12 @@ pub fn setup_test_environment<'a>(
     // Deploy LiquidityPool
     let liquidity_pool_id = env.register(liquidity_pool::WASM, ());
     let liquidity_client = liquidity_pool::Client::new(env, &liquidity_pool_id);
-    liquidity_client.initialize(&config_manager_id, &token_client.address);
+    liquidity_client.initialize(&admin, &config_manager_id, &token_client.address);
 
     // Deploy PositionManager
     let position_manager_id = env.register(position_manager::WASM, ());
     let position_client = position_manager::Client::new(env, &position_manager_id);
-    position_client.initialize(&config_manager_id);
+    position_client.initialize(&admin, &config_manager_id);
 
     // Configure ConfigManager with contract addresses
     config_client.set_oracle_integrator(&admin, &oracle_id);
@@ -176,5 +183,98 @@ pub fn setup_stress_test<'a>(env: &'a Env) -> TestEnvironment<'a> {
         10_000_000_000,       // 10,000 tokens per trader
         100_000_000_000,      // 100,000 tokens per LP
         10_000_000_000_000,   // 10M tokens initial pool liquidity
+    )
+}
+
+// ============================================================================
+// ORDER TEST HELPERS
+// ============================================================================
+
+/// Standard execution fee for order tests
+pub const ORDER_EXECUTION_FEE: u128 = 1_000_000; // 0.1 tokens
+
+/// Set oracle price for a specific market (used to trigger orders)
+pub fn set_oracle_price(
+    env: &Env,
+    oracle_id: &Address,
+    admin: &Address,
+    market_id: u32,
+    new_price: i128,
+) {
+    let oracle_client = oracle_integrator::Client::new(env, oracle_id);
+    let mut base_prices = soroban_sdk::Map::new(env);
+
+    // Set all markets to their defaults, then override the target market
+    base_prices.set(0u32, 100_000_000i128);        // XLM: $1.00
+    base_prices.set(1u32, 50_000_000_000_000i128); // BTC: $50,000
+    base_prices.set(2u32, 3_000_000_000_000i128);  // ETH: $3,000
+
+    // Override target market
+    base_prices.set(market_id, new_price);
+
+    oracle_client.set_test_mode(admin, &true, &base_prices);
+}
+
+/// Create a limit order with standard parameters
+pub fn create_test_limit_order(
+    env: &Env,
+    position_client: &position_manager::Client,
+    trader: &Address,
+    market_id: u32,
+    trigger_price: i128,
+    collateral: u128,
+    leverage: u32,
+    is_long: bool,
+) -> u64 {
+    position_client.create_limit_order(
+        trader,
+        &market_id,
+        &trigger_price,
+        &0i128, // No slippage limit
+        &collateral,
+        &leverage,
+        &is_long,
+        &ORDER_EXECUTION_FEE,
+        &0u64, // No expiry
+    )
+}
+
+/// Create a stop-loss order with standard parameters
+pub fn create_test_stop_loss(
+    env: &Env,
+    position_client: &position_manager::Client,
+    trader: &Address,
+    position_id: u64,
+    trigger_price: i128,
+    close_percentage: u32,
+) -> u64 {
+    position_client.create_stop_loss(
+        trader,
+        &position_id,
+        &trigger_price,
+        &0i128, // No slippage limit
+        &close_percentage,
+        &ORDER_EXECUTION_FEE,
+        &0u64, // No expiry
+    )
+}
+
+/// Create a take-profit order with standard parameters
+pub fn create_test_take_profit(
+    env: &Env,
+    position_client: &position_manager::Client,
+    trader: &Address,
+    position_id: u64,
+    trigger_price: i128,
+    close_percentage: u32,
+) -> u64 {
+    position_client.create_take_profit(
+        trader,
+        &position_id,
+        &trigger_price,
+        &0i128, // No slippage limit
+        &close_percentage,
+        &ORDER_EXECUTION_FEE,
+        &0u64, // No expiry
     )
 }

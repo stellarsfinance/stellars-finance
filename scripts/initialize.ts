@@ -213,6 +213,7 @@ async function main() {
     });
 
     const liquidityInitTx = await liquidityPoolClient.initialize({
+      admin: publicKey,
       config_manager: contracts['config-manager'],
       token: contracts['faucet-token'],
     });
@@ -254,6 +255,7 @@ async function main() {
     });
 
     const positionInitTx = await positionManagerClient.initialize({
+      admin: publicKey,
       config_manager: contracts['config-manager'],
     });
 

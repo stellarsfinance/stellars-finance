@@ -224,10 +224,8 @@ fn test_liquidation_and_trading_workflow() {
     position_client.open_position(&extra_trader, &market_id, &collateral, &high_leverage, &true);
 
     // Simulate time to make risky position liquidatable
-    for _ in 0..10000 {
-        advance_funding_interval(&env);
-        market_client.update_funding_rate(&test_env.admin, &market_id);
-    }
+    advance_funding_intervals(&env, 10000);
+    market_client.update_funding_rate(&test_env.admin, &market_id);
 
     // Keeper liquidates the risky position
     let keeper = test_env.lps.get(0).unwrap();

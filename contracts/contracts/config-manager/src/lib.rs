@@ -1,138 +1,29 @@
 #![no_std]
 
-//! # ConfigManager Contract
+//! # Config Manager Contract
 //!
-//! The ConfigManager contract serves as the centralized configuration store for all protocol
-//! parameters across the Stellars Finance perpetuals system. It provides a secure and flexible
-//! way to manage protocol settings, fees, limits, and operational parameters.
+//! Central configuration hub for the Stellars Finance protocol. This contract stores
+//! all system parameters and maintains a registry of other contract addresses.
 //!
-//! ## Overview
-//!
-//! This contract acts as the single source of truth for all configurable parameters used by
-//! other contracts in the protocol. It implements access control to ensure only authorized
-//! administrators can modify settings, while providing read-only access to all other contracts
-//! and users. This allows parameter updates without upgrading other contracts.
-//!
-//! ## Key Responsibilities
-//!
-//! - **Parameter Storage**: Store all protocol configuration parameters
-//! - **Access Control**: Restrict parameter updates to authorized administrators
-//! - **Parameter Validation**: Ensure parameters are within acceptable bounds
-//! - **Configuration Versioning**: Track configuration changes over time
-//! - **Default Values**: Provide sensible defaults for all parameters
-//!
-//! ## Configuration Categories
-//!
-//! ### 1. Trading Parameters
-//! - **MIN_LEVERAGE**: Minimum allowed leverage (default: 5x)
-//! - **MAX_LEVERAGE**: Maximum allowed leverage (default: 20x)
-//! - **MIN_POSITION_SIZE**: Minimum position size in USD
-//! - **MAX_POSITION_SIZE**: Maximum position size in USD
-//!
-//! ### 2. Fee Configuration
-//! - **MAKER_FEE_BPS**: Fee for limit orders in basis points (e.g., 2 = 0.02%)
-//! - **TAKER_FEE_BPS**: Fee for market orders in basis points (e.g., 5 = 0.05%)
-//! - **LIQUIDATION_FEE_BPS**: Fee paid to liquidators (e.g., 50 = 0.5%)
-//! - **FUNDING_FEE_BPS**: Maximum funding rate per hour
-//! - **PROTOCOL_FEE_SHARE**: Portion of fees going to protocol treasury (e.g., 20 = 20%)
-//!
-//! ### 3. Risk Parameters
-//! - **LIQUIDATION_THRESHOLD**: Margin ratio triggering liquidation (e.g., 9000 = 90%)
-//! - **MAINTENANCE_MARGIN**: Minimum margin to maintain position (e.g., 5000 = 50%)
-//! - **INITIAL_MARGIN**: Margin required to open position based on leverage
-//! - **MAX_PRICE_DEVIATION_BPS**: Max price deviation between oracles (e.g., 500 = 5%)
-//! - **PRICE_STALENESS_THRESHOLD**: Maximum age of oracle price in seconds (e.g., 60)
-//!
-//! ### 4. Market Limits
-//! - **MAX_OPEN_INTEREST**: Maximum total open interest per market in USD
-//! - **MAX_POOL_UTILIZATION**: Maximum % of pool that can be used (e.g., 8000 = 80%)
-//! - **MAX_POSITION_OI_RATIO**: Max single position as % of total OI (e.g., 500 = 5%)
-//! - **MAX_FUNDING_RATE**: Maximum funding rate per hour in basis points
-//!
-//! ### 5. Time Parameters
-//! - **FUNDING_INTERVAL**: Time between funding rate updates (default: 60 seconds)
-//! - **LIQUIDATION_GRACE_PERIOD**: Time before liquidatable position can be liquidated
-//! - **PRICE_UPDATE_INTERVAL**: Minimum time between price updates
-//! - **TTL_EXTENSION_THRESHOLD**: When to extend storage TTL
-//!
-//! ### 6. Operational Settings
-//! - **ADMIN_ADDRESS**: Protocol administrator address
-//! - **TREASURY_ADDRESS**: Protocol treasury for fee collection
-//! - **KEEPER_MIN_REWARD**: Minimum reward for keeper operations
-//! - **EMERGENCY_PAUSE**: Global emergency pause flag
-//!
-//! ## Storage Strategy
-//!
-//! - **Instance Storage**: Used for all configuration parameters
-//!   - Fast access for frequently read values
-//!   - Lower cost than persistent storage for static data
-//!   - Parameters don't need to persist across upgrades (can be re-initialized)
-//!   - Suitable for configuration that changes infrequently
+//! ## Key Features
+//! - **Contract Registry**: Stores addresses of all protocol contracts (LiquidityPool,
+//!   PositionManager, MarketManager, OracleIntegrator, Token, DIA/Reflector oracles)
+//! - **Trading Parameters**: Min/max leverage (default 5-20x), minimum position size
+//! - **Fee Parameters**: Maker fee, taker fee, liquidation fee (all in basis points)
+//! - **Risk Parameters**: Liquidation threshold, maintenance margin, max price deviation
+//! - **Time Parameters**: Funding interval (60s), price staleness threshold
+//! - **Liquidity Parameters**: Max utilization ratio (80%), min reserve ratio (20%)
 //!
 //! ## Access Control
+//! All configuration changes require admin authorization. The admin can be transferred
+//! to a new address via `set_admin()`.
 //!
-//! - **Read Access**: Public - any contract or user can read parameters
-//! - **Write Access**: Restricted - only admin can set/update parameters
-//! - **Admin Management**: Admin can transfer admin role to new address
-//! - **Multi-sig Support**: Future enhancement for governance-based updates
-//!
-//! ## Parameter Update Flow
-//!
-//! 1. Admin proposes parameter change
-//! 2. Validate new value is within acceptable bounds
-//! 3. Check parameter dependencies (e.g., MIN_LEVERAGE < MAX_LEVERAGE)
-//! 4. Update parameter in instance storage
-//! 5. Emit parameter updated event with old and new values
-//! 6. Log change for audit trail
-//!
-//! ## Safety Mechanisms
-//!
-//! - **Bounds Checking**: All parameters have min/max limits
-//! - **Consistency Validation**: Related parameters are validated together
-//! - **Emergency Pause**: Can disable trading while allowing position closes
-//! - **Gradual Updates**: Time delays for sensitive parameter changes
-//! - **Rollback Capability**: Ability to revert to previous configuration
-//!
-//! ## Integration Points
-//!
-//! - **PositionManager**: Reads leverage limits, fees, liquidation thresholds
-//! - **MarketManager**: Reads funding intervals, OI caps, market parameters
-//! - **OracleIntegrator**: Reads price staleness limits, deviation thresholds
-//! - **LiquidityPool**: Reads pool utilization limits, fee distributions
-//!
-//! ## Example Parameters
-//!
-//! ```rust
-//! // Trading
-//! MIN_LEVERAGE = 5
-//! MAX_LEVERAGE = 20
-//! MIN_POSITION_SIZE = 10_000_000  // 10 USD (7 decimals)
-//!
-//! // Fees (basis points)
-//! MAKER_FEE_BPS = 2     // 0.02%
-//! TAKER_FEE_BPS = 5     // 0.05%
-//! LIQUIDATION_FEE_BPS = 50  // 0.5%
-//!
-//! // Risk
-//! LIQUIDATION_THRESHOLD = 9000  // 90%
-//! MAINTENANCE_MARGIN = 5000     // 50%
-//! MAX_PRICE_DEVIATION_BPS = 500 // 5%
-//!
-//! // Time
-//! FUNDING_INTERVAL = 60  // 60 seconds
-//! PRICE_STALENESS_THRESHOLD = 60  // 60 seconds
-//! ```
-//!
-//! ## Future Enhancements
-//!
-//! - Governance-based parameter updates (DAO voting)
-//! - Time-locked parameter changes for security
-//! - Parameter change proposals with discussion period
-//! - Automated parameter optimization based on market conditions
-//! - Per-market parameter overrides
-//! - Parameter change impact simulation
+//! ## Usage
+//! Other contracts in the protocol import this contract to read configuration values
+//! and resolve contract addresses. This creates a single source of truth for all
+//! protocol settings.
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 #[derive(Clone)]
 #[contracttype]
@@ -164,8 +55,8 @@ pub enum DataKey {
     // Liquidity parameters
     MaxUtilizationRatio,
     MinLiquidityReserveRatio,
-    // Generic config key for dynamic parameters
-    Config(Symbol),
+    // Borrowing parameters
+    BorrowRatePerSecond,
 }
 
 #[contract]
@@ -229,6 +120,9 @@ impl ConfigManager {
             panic!("already initialized");
         }
 
+        // Require the admin to authorize this initialization
+        admin.require_auth();
+
         // Set admin
         put_admin(&env, &admin);
 
@@ -255,57 +149,10 @@ impl ConfigManager {
         // Liquidity parameters (in basis points)
         put_config_value(&env, &DataKey::MaxUtilizationRatio, 8000); // 80%
         put_config_value(&env, &DataKey::MinLiquidityReserveRatio, 2000); // 20%
-    }
 
-    /// Set a configuration parameter using a Symbol key.
-    ///
-    /// # Arguments
-    ///
-    /// * `admin` - The administrator address (must match stored admin)
-    /// * `key` - The configuration parameter key
-    /// * `value` - The new value for the parameter
-    ///
-    /// # Panics
-    ///
-    /// Panics if caller is not the admin
-    pub fn set_config(env: Env, admin: Address, key: Symbol, value: i128) {
-        // Verify admin authorization
-        require_admin(&env, &admin);
-
-        // TODO: Add parameter validation based on key
-        // For example:
-        // - Verify MIN_LEVERAGE < MAX_LEVERAGE
-        // - Ensure fees are within reasonable bounds
-        // - Check liquidation threshold > maintenance margin
-
-        // Set the configuration value using generic key
-        put_config_value(&env, &DataKey::Config(key), value);
-    }
-
-    /// Get a configuration parameter using a Symbol key.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The configuration parameter key
-    ///
-    /// # Returns
-    ///
-    /// The parameter value, or 0 if not set
-    pub fn get_config(env: Env, key: Symbol) -> i128 {
-        get_config_value(&env, &DataKey::Config(key))
-    }
-
-    /// Get a time-based configuration parameter using a Symbol key.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The configuration parameter key
-    ///
-    /// # Returns
-    ///
-    /// The parameter value as u64, or 0 if not set
-    pub fn get_time_config(env: Env, key: Symbol) -> u64 {
-        get_time_config_value(&env, &DataKey::Config(key))
+        // Borrowing parameters (rate per second scaled by 1e7)
+        // Default: 1 = 0.0000001% per second (~3.15% APR)
+        put_config_value(&env, &DataKey::BorrowRatePerSecond, 1);
     }
 
     /// Update the admin address.
@@ -656,6 +503,172 @@ impl ConfigManager {
             panic!("invalid reserve ratio");
         }
         put_config_value(&env, &DataKey::MinLiquidityReserveRatio, ratio);
+    }
+
+    /// Get borrow rate per second (scaled by 1e7).
+    ///
+    /// # Returns
+    ///
+    /// Borrow rate per second for calculating borrowing fees
+    pub fn borrow_rate_per_second(env: Env) -> i128 {
+        get_config_value(&env, &DataKey::BorrowRatePerSecond)
+    }
+
+    /// Set borrow rate per second.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `rate` - Borrow rate per second (scaled by 1e7, must be >= 0)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or rate is negative
+    pub fn set_borrow_rate_per_second(env: Env, admin: Address, rate: i128) {
+        require_admin(&env, &admin);
+        if rate < 0 {
+            panic!("borrow rate must be >= 0");
+        }
+        put_config_value(&env, &DataKey::BorrowRatePerSecond, rate);
+    }
+
+    /// Set leverage limits.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `min_leverage` - Minimum leverage (must be >= 1)
+    /// * `max_leverage` - Maximum leverage (must be > min_leverage and <= 100)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or limits are invalid
+    pub fn set_leverage_limits(env: Env, admin: Address, min_leverage: i128, max_leverage: i128) {
+        require_admin(&env, &admin);
+        if min_leverage < 1 {
+            panic!("min leverage must be >= 1");
+        }
+        if max_leverage <= min_leverage {
+            panic!("max leverage must be > min leverage");
+        }
+        if max_leverage > 100 {
+            panic!("max leverage must be <= 100");
+        }
+        put_config_value(&env, &DataKey::MinLeverage, min_leverage);
+        put_config_value(&env, &DataKey::MaxLeverage, max_leverage);
+    }
+
+    /// Set minimum position size.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `size` - Minimum position size in base units (must be > 0)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or size is invalid
+    pub fn set_min_position_size(env: Env, admin: Address, size: i128) {
+        require_admin(&env, &admin);
+        if size <= 0 {
+            panic!("min position size must be > 0");
+        }
+        put_config_value(&env, &DataKey::MinPositionSize, size);
+    }
+
+    /// Set fee parameters in basis points.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `maker_fee` - Maker fee in basis points (max 1000 = 10%)
+    /// * `taker_fee` - Taker fee in basis points (max 1000 = 10%)
+    /// * `liquidation_fee` - Liquidation fee in basis points (max 1000 = 10%)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or fees are invalid
+    pub fn set_fees(env: Env, admin: Address, maker_fee: i128, taker_fee: i128, liquidation_fee: i128) {
+        require_admin(&env, &admin);
+        if maker_fee < 0 || maker_fee > 1000 {
+            panic!("maker fee must be 0-1000 bps");
+        }
+        if taker_fee < 0 || taker_fee > 1000 {
+            panic!("taker fee must be 0-1000 bps");
+        }
+        if liquidation_fee < 0 || liquidation_fee > 1000 {
+            panic!("liquidation fee must be 0-1000 bps");
+        }
+        put_config_value(&env, &DataKey::MakerFeeBps, maker_fee);
+        put_config_value(&env, &DataKey::TakerFeeBps, taker_fee);
+        put_config_value(&env, &DataKey::LiquidationFeeBps, liquidation_fee);
+    }
+
+    /// Set risk parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `liquidation_threshold` - Liquidation threshold in bps (must be > maintenance_margin)
+    /// * `maintenance_margin` - Maintenance margin in bps (must be > 0)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or parameters are invalid
+    pub fn set_risk_params(env: Env, admin: Address, liquidation_threshold: i128, maintenance_margin: i128) {
+        require_admin(&env, &admin);
+        if maintenance_margin <= 0 || maintenance_margin > 10000 {
+            panic!("maintenance margin must be 1-10000 bps");
+        }
+        if liquidation_threshold <= maintenance_margin {
+            panic!("liquidation threshold must be > maintenance margin");
+        }
+        if liquidation_threshold > 10000 {
+            panic!("liquidation threshold must be <= 10000 bps");
+        }
+        put_config_value(&env, &DataKey::LiquidationThreshold, liquidation_threshold);
+        put_config_value(&env, &DataKey::MaintenanceMargin, maintenance_margin);
+    }
+
+    /// Set maximum price deviation in basis points.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `deviation` - Max price deviation in bps (must be 1-5000)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or deviation is invalid
+    pub fn set_max_price_deviation(env: Env, admin: Address, deviation: i128) {
+        require_admin(&env, &admin);
+        if deviation < 1 || deviation > 5000 {
+            panic!("price deviation must be 1-5000 bps");
+        }
+        put_config_value(&env, &DataKey::MaxPriceDeviationBps, deviation);
+    }
+
+    /// Set time parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `funding_interval` - Funding interval in seconds (must be >= 1)
+    /// * `staleness_threshold` - Price staleness threshold in seconds (must be >= 1)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or parameters are invalid
+    pub fn set_time_params(env: Env, admin: Address, funding_interval: u64, staleness_threshold: u64) {
+        require_admin(&env, &admin);
+        if funding_interval < 1 {
+            panic!("funding interval must be >= 1");
+        }
+        if staleness_threshold < 1 {
+            panic!("staleness threshold must be >= 1");
+        }
+        put_time_config_value(&env, &DataKey::FundingInterval, funding_interval);
+        put_time_config_value(&env, &DataKey::PriceStalenessThreshold, staleness_threshold);
     }
 }
 

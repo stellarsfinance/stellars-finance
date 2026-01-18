@@ -25,7 +25,7 @@ fn create_mock_config_manager(env: &Env, admin: &Address) -> Address {
     let contract_id = env.register(config_manager::WASM, ());
     let client = config_manager::Client::new(env, &contract_id);
 
-    // Initialize with admin
+    // Initialize with admin (admin must authorize)
     client.initialize(admin);
 
     // Set minimum liquidity reserve ratio (e.g., 10% = 1000 bps)
@@ -55,8 +55,8 @@ fn test_deposit_and_withdraw_happy_path() {
     let contract_id = env.register(LiquidityPool, ());
     let client = LiquidityPoolClient::new(&env, &contract_id);
 
-    // Initialize the pool with config manager and token
-    client.initialize(&config_manager_id, &token_client.address);
+    // Initialize the pool with admin, config manager and token
+    client.initialize(&admin, &config_manager_id, &token_client.address);
 
     // Test deposit
     let shares = client.deposit(&user1, &500);
@@ -108,8 +108,8 @@ fn test_multiple_deposits() {
     let contract_id = env.register(LiquidityPool, ());
     let client = LiquidityPoolClient::new(&env, &contract_id);
 
-    // Initialize the pool with config manager and token
-    client.initialize(&config_manager_id, &token_client.address);
+    // Initialize the pool with admin, config manager and token
+    client.initialize(&admin, &config_manager_id, &token_client.address);
 
     // User1 deposits 500 tokens
     let shares1 = client.deposit(&user1, &500);
@@ -151,8 +151,8 @@ fn test_varying_deposit_sizes() {
     let contract_id = env.register(LiquidityPool, ());
     let client = LiquidityPoolClient::new(&env, &contract_id);
 
-    // Initialize the pool with config manager and token
-    client.initialize(&config_manager_id, &token_client.address);
+    // Initialize the pool with admin, config manager and token
+    client.initialize(&admin, &config_manager_id, &token_client.address);
 
     // User1 deposits 1000 tokens (first deposit, 1:1 ratio)
     let shares1 = client.deposit(&user1, &1000);
@@ -216,8 +216,8 @@ fn test_extreme_values() {
     let contract_id = env.register(LiquidityPool, ());
     let client = LiquidityPoolClient::new(&env, &contract_id);
 
-    // Initialize the pool with config manager and token
-    client.initialize(&config_manager_id, &token_client.address);
+    // Initialize the pool with admin, config manager and token
+    client.initialize(&admin, &config_manager_id, &token_client.address);
 
     // Test with very large initial deposit
     let large_deposit = 1_000_000_000;

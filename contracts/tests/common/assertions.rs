@@ -81,3 +81,57 @@ pub fn assert_utilization_within_limit(
         max_utilization_bps
     );
 }
+
+/// Assert user has expected number of orders
+pub fn assert_user_orders_count(
+    _env: &Env,
+    position_client: &position_manager::Client,
+    user: &Address,
+    expected_count: usize,
+) {
+    let orders = position_client.get_user_orders(user);
+
+    assert_eq!(
+        orders.len() as usize,
+        expected_count,
+        "User order count mismatch: expected {}, got {}",
+        expected_count,
+        orders.len()
+    );
+}
+
+/// Assert position has expected number of attached orders (SL/TP)
+pub fn assert_position_orders_count(
+    _env: &Env,
+    position_client: &position_manager::Client,
+    position_id: u64,
+    expected_count: usize,
+) {
+    let orders = position_client.get_position_orders(&position_id);
+
+    assert_eq!(
+        orders.len() as usize,
+        expected_count,
+        "Position {} order count mismatch: expected {}, got {}. Order IDs: {:?}",
+        position_id,
+        expected_count,
+        orders.len(),
+        orders
+    );
+}
+
+/// Assert order can or cannot be executed
+pub fn assert_order_executable(
+    _env: &Env,
+    position_client: &position_manager::Client,
+    order_id: u64,
+    should_be_executable: bool,
+) {
+    let can_execute = position_client.can_execute_order(&order_id);
+
+    assert_eq!(
+        can_execute, should_be_executable,
+        "Order {} executability mismatch: expected {}, got {}",
+        order_id, should_be_executable, can_execute
+    );
+}
