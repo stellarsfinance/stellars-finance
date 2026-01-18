@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, Address, Env};
 
 #[test]
 fn test_initialize_and_get_config() {
@@ -29,60 +29,71 @@ fn test_initialize_and_get_config() {
 }
 
 #[test]
-fn test_set_and_get_config() {
+fn test_set_leverage_limits() {
     let env = Env::default();
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
 
-    // Deploy config manager contract
     let contract_id = env.register(ConfigManager, ());
     let client = ConfigManagerClient::new(&env, &contract_id);
 
-    // Initialize contract
     client.initialize(&admin);
 
-    // Set a custom config value
-    let custom_key = symbol_short!("CUSTOM");
-    client.set_config(&admin, &custom_key, &12345);
+    // Verify defaults
+    assert_eq!(client.min_leverage(), 5);
+    assert_eq!(client.max_leverage(), 20);
 
-    // Get the config value
-    assert_eq!(client.get_config(&custom_key), 12345);
-
-    // Update the config value
-    client.set_config(&admin, &custom_key, &54321);
-    assert_eq!(client.get_config(&custom_key), 54321);
+    // Update leverage limits
+    client.set_leverage_limits(&admin, &2, &50);
+    assert_eq!(client.min_leverage(), 2);
+    assert_eq!(client.max_leverage(), 50);
 }
 
 #[test]
-fn test_update_leverage_limits() {
+fn test_set_fees() {
     let env = Env::default();
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
 
-    // Deploy config manager contract
     let contract_id = env.register(ConfigManager, ());
     let client = ConfigManagerClient::new(&env, &contract_id);
 
-    // Initialize contract
     client.initialize(&admin);
 
-    // Test using generic set_config with custom keys
-    let custom_min_key = symbol_short!("CUST_MIN");
-    let custom_max_key = symbol_short!("CUST_MAX");
+    // Verify defaults
+    assert_eq!(client.maker_fee_bps(), 2);
+    assert_eq!(client.taker_fee_bps(), 5);
+    assert_eq!(client.liquidation_fee_bps(), 50);
 
-    client.set_config(&admin, &custom_min_key, &10);
-    assert_eq!(client.get_config(&custom_min_key), 10);
+    // Update fees
+    client.set_fees(&admin, &10, &20, &100);
+    assert_eq!(client.maker_fee_bps(), 10);
+    assert_eq!(client.taker_fee_bps(), 20);
+    assert_eq!(client.liquidation_fee_bps(), 100);
+}
 
-    client.set_config(&admin, &custom_max_key, &15);
-    assert_eq!(client.get_config(&custom_max_key), 15);
+#[test]
+fn test_set_risk_params() {
+    let env = Env::default();
+    env.mock_all_auths();
 
-    // Note: The named parameters (MinLeverage, MaxLeverage) use dedicated DataKey variants
-    // and cannot be updated via set_config. They would need dedicated setter methods.
-    // For now, they retain their default values.
-    assert_eq!(client.min_leverage(), 5);
-    assert_eq!(client.max_leverage(), 20);
+    let admin = Address::generate(&env);
+
+    let contract_id = env.register(ConfigManager, ());
+    let client = ConfigManagerClient::new(&env, &contract_id);
+
+    client.initialize(&admin);
+
+    // Verify defaults
+    assert_eq!(client.liquidation_threshold(), 9000);
+    assert_eq!(client.maintenance_margin(), 5000);
+
+    // Update risk params
+    client.set_risk_params(&admin, &8500, &4000);
+    assert_eq!(client.liquidation_threshold(), 8500);
+    assert_eq!(client.maintenance_margin(), 4000);
 }
 
 #[test]

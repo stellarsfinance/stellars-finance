@@ -23,7 +23,7 @@
 //! and resolve contract addresses. This creates a single source of truth for all
 //! protocol settings.
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 #[derive(Clone)]
 #[contracttype]
@@ -55,8 +55,6 @@ pub enum DataKey {
     // Liquidity parameters
     MaxUtilizationRatio,
     MinLiquidityReserveRatio,
-    // Generic config key for dynamic parameters
-    Config(Symbol),
 }
 
 #[contract]
@@ -149,57 +147,6 @@ impl ConfigManager {
         // Liquidity parameters (in basis points)
         put_config_value(&env, &DataKey::MaxUtilizationRatio, 8000); // 80%
         put_config_value(&env, &DataKey::MinLiquidityReserveRatio, 2000); // 20%
-    }
-
-    /// Set a configuration parameter using a Symbol key.
-    ///
-    /// # Arguments
-    ///
-    /// * `admin` - The administrator address (must match stored admin)
-    /// * `key` - The configuration parameter key
-    /// * `value` - The new value for the parameter
-    ///
-    /// # Panics
-    ///
-    /// Panics if caller is not the admin
-    pub fn set_config(env: Env, admin: Address, key: Symbol, value: i128) {
-        // Verify admin authorization
-        require_admin(&env, &admin);
-
-        // TODO: Add parameter validation based on key
-        // For example:
-        // - Verify MIN_LEVERAGE < MAX_LEVERAGE
-        // - Ensure fees are within reasonable bounds
-        // - Check liquidation threshold > maintenance margin
-
-        // Set the configuration value using generic key
-        put_config_value(&env, &DataKey::Config(key), value);
-    }
-
-    /// Get a configuration parameter using a Symbol key.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The configuration parameter key
-    ///
-    /// # Returns
-    ///
-    /// The parameter value, or 0 if not set
-    pub fn get_config(env: Env, key: Symbol) -> i128 {
-        get_config_value(&env, &DataKey::Config(key))
-    }
-
-    /// Get a time-based configuration parameter using a Symbol key.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The configuration parameter key
-    ///
-    /// # Returns
-    ///
-    /// The parameter value as u64, or 0 if not set
-    pub fn get_time_config(env: Env, key: Symbol) -> u64 {
-        get_time_config_value(&env, &DataKey::Config(key))
     }
 
     /// Update the admin address.
@@ -550,6 +497,145 @@ impl ConfigManager {
             panic!("invalid reserve ratio");
         }
         put_config_value(&env, &DataKey::MinLiquidityReserveRatio, ratio);
+    }
+
+    /// Set leverage limits.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `min_leverage` - Minimum leverage (must be >= 1)
+    /// * `max_leverage` - Maximum leverage (must be > min_leverage and <= 100)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or limits are invalid
+    pub fn set_leverage_limits(env: Env, admin: Address, min_leverage: i128, max_leverage: i128) {
+        require_admin(&env, &admin);
+        if min_leverage < 1 {
+            panic!("min leverage must be >= 1");
+        }
+        if max_leverage <= min_leverage {
+            panic!("max leverage must be > min leverage");
+        }
+        if max_leverage > 100 {
+            panic!("max leverage must be <= 100");
+        }
+        put_config_value(&env, &DataKey::MinLeverage, min_leverage);
+        put_config_value(&env, &DataKey::MaxLeverage, max_leverage);
+    }
+
+    /// Set minimum position size.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `size` - Minimum position size in base units (must be > 0)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or size is invalid
+    pub fn set_min_position_size(env: Env, admin: Address, size: i128) {
+        require_admin(&env, &admin);
+        if size <= 0 {
+            panic!("min position size must be > 0");
+        }
+        put_config_value(&env, &DataKey::MinPositionSize, size);
+    }
+
+    /// Set fee parameters in basis points.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `maker_fee` - Maker fee in basis points (max 1000 = 10%)
+    /// * `taker_fee` - Taker fee in basis points (max 1000 = 10%)
+    /// * `liquidation_fee` - Liquidation fee in basis points (max 1000 = 10%)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or fees are invalid
+    pub fn set_fees(env: Env, admin: Address, maker_fee: i128, taker_fee: i128, liquidation_fee: i128) {
+        require_admin(&env, &admin);
+        if maker_fee < 0 || maker_fee > 1000 {
+            panic!("maker fee must be 0-1000 bps");
+        }
+        if taker_fee < 0 || taker_fee > 1000 {
+            panic!("taker fee must be 0-1000 bps");
+        }
+        if liquidation_fee < 0 || liquidation_fee > 1000 {
+            panic!("liquidation fee must be 0-1000 bps");
+        }
+        put_config_value(&env, &DataKey::MakerFeeBps, maker_fee);
+        put_config_value(&env, &DataKey::TakerFeeBps, taker_fee);
+        put_config_value(&env, &DataKey::LiquidationFeeBps, liquidation_fee);
+    }
+
+    /// Set risk parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `liquidation_threshold` - Liquidation threshold in bps (must be > maintenance_margin)
+    /// * `maintenance_margin` - Maintenance margin in bps (must be > 0)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or parameters are invalid
+    pub fn set_risk_params(env: Env, admin: Address, liquidation_threshold: i128, maintenance_margin: i128) {
+        require_admin(&env, &admin);
+        if maintenance_margin <= 0 || maintenance_margin > 10000 {
+            panic!("maintenance margin must be 1-10000 bps");
+        }
+        if liquidation_threshold <= maintenance_margin {
+            panic!("liquidation threshold must be > maintenance margin");
+        }
+        if liquidation_threshold > 10000 {
+            panic!("liquidation threshold must be <= 10000 bps");
+        }
+        put_config_value(&env, &DataKey::LiquidationThreshold, liquidation_threshold);
+        put_config_value(&env, &DataKey::MaintenanceMargin, maintenance_margin);
+    }
+
+    /// Set maximum price deviation in basis points.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `deviation` - Max price deviation in bps (must be 1-5000)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or deviation is invalid
+    pub fn set_max_price_deviation(env: Env, admin: Address, deviation: i128) {
+        require_admin(&env, &admin);
+        if deviation < 1 || deviation > 5000 {
+            panic!("price deviation must be 1-5000 bps");
+        }
+        put_config_value(&env, &DataKey::MaxPriceDeviationBps, deviation);
+    }
+
+    /// Set time parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `funding_interval` - Funding interval in seconds (must be >= 1)
+    /// * `staleness_threshold` - Price staleness threshold in seconds (must be >= 1)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or parameters are invalid
+    pub fn set_time_params(env: Env, admin: Address, funding_interval: u64, staleness_threshold: u64) {
+        require_admin(&env, &admin);
+        if funding_interval < 1 {
+            panic!("funding interval must be >= 1");
+        }
+        if staleness_threshold < 1 {
+            panic!("staleness threshold must be >= 1");
+        }
+        put_time_config_value(&env, &DataKey::FundingInterval, funding_interval);
+        put_time_config_value(&env, &DataKey::PriceStalenessThreshold, staleness_threshold);
     }
 }
 
