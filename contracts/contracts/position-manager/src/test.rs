@@ -56,9 +56,9 @@ fn setup_test_environment<'a>(
 
     // Enable test mode with base prices for simulated oracle
     let mut base_prices = Map::new(env);
-    base_prices.set(0u32, 100_000_000i128);  // XLM: $1.00
+    base_prices.set(0u32, 100_000_000i128); // XLM: $1.00
     base_prices.set(1u32, 50_000_000_000i128); // BTC: $50,000
-    base_prices.set(2u32, 3_000_000_000i128);  // ETH: $3,000
+    base_prices.set(2u32, 3_000_000_000i128); // ETH: $3,000
     oracle_client.set_test_mode(&admin, &true, &base_prices);
 
     // Deploy MarketManager
@@ -161,7 +161,11 @@ fn test_open_position_success() {
         position_client.open_position(&trader, &market_id, &collateral, &leverage, &is_long);
 
     // Verify position ID is 1 (first position - IDs start at 1)
-    assert_eq!(position_id, 1, "expected first position_id to be 1, got {}", position_id);
+    assert_eq!(
+        position_id, 1,
+        "expected first position_id to be 1, got {}",
+        position_id
+    );
 
     // Verify collateral was transferred
     let new_balance = token_client.balance(&trader);
@@ -691,7 +695,13 @@ const CLOSE_FULL: u32 = 10000; // 100%
 const CLOSE_HALF: u32 = 5000; // 50%
 
 /// Helper to change oracle price for testing order triggers
-fn set_oracle_price(env: &Env, oracle_id: &Address, admin: &Address, market_id: u32, new_price: i128) {
+fn set_oracle_price(
+    env: &Env,
+    oracle_id: &Address,
+    admin: &Address,
+    market_id: u32,
+    new_price: i128,
+) {
     let oracle_client = oracle_integrator::Client::new(env, oracle_id);
     let mut base_prices = Map::new(env);
     base_prices.set(market_id, new_price);
@@ -758,7 +768,10 @@ fn test_create_limit_order_long_success() {
 
     // Verify execution fee AND collateral were transferred to contract (escrowed)
     let new_balance = token_client.balance(&trader);
-    assert_eq!(new_balance as u128, (initial_balance as u128) - EXECUTION_FEE - collateral);
+    assert_eq!(
+        new_balance as u128,
+        (initial_balance as u128) - EXECUTION_FEE - collateral
+    );
 
     let new_contract_balance = token_client.balance(&position_manager_id);
     assert_eq!(
@@ -1197,7 +1210,10 @@ fn test_create_stop_loss_long_success() {
 
     // Verify execution fee was transferred
     let new_balance = token_client.balance(&trader);
-    assert_eq!(new_balance as u128, (initial_balance as u128) - EXECUTION_FEE);
+    assert_eq!(
+        new_balance as u128,
+        (initial_balance as u128) - EXECUTION_FEE
+    );
 
     // Verify order is stored correctly
     let order = position_client.get_order(&order_id);
@@ -1657,7 +1673,10 @@ fn test_create_take_profit_long_success() {
 
     // Verify execution fee was transferred
     let new_balance = token_client.balance(&trader);
-    assert_eq!(new_balance as u128, (initial_balance as u128) - EXECUTION_FEE);
+    assert_eq!(
+        new_balance as u128,
+        (initial_balance as u128) - EXECUTION_FEE
+    );
 
     // Verify order is stored correctly
     let order = position_client.get_order(&order_id);
@@ -2119,8 +2138,8 @@ fn test_execute_order_slippage_exceeded() {
     let order_id = position_client.create_limit_order(
         &trader,
         &0u32,
-        &95_000_000i128,   // trigger at $0.95
-        &93_000_000i128,   // only accept if price <= $0.93 (strict slippage)
+        &95_000_000i128, // trigger at $0.95
+        &93_000_000i128, // only accept if price <= $0.93 (strict slippage)
         &1_000_000_000u128,
         &10u32,
         &true,
@@ -2450,4 +2469,263 @@ fn test_can_execute_order_false_price_not_met() {
 
     // Cannot execute because price hasn't reached trigger
     assert_eq!(position_client.can_execute_order(&order_id), false);
+}
+
+// ============================================================================
+// CALCULATE PNL TESTS
+// ============================================================================
+
+#[test]
+fn test_calculate_pnl_long_profit() {
+    let env = Env::default();
+    let (
+        _config_id,
+        oracle_id,
+        position_manager_id,
+        _token_address,
+        token_client,
+        _token_admin,
+        admin,
+        trader,
+        _liquidity_pool_id,
+    ) = setup_test_environment(&env);
+
+    let position_client = PositionManagerClient::new(&env, &position_manager_id);
+
+    // Open long position at $1.00
+    let collateral = 1_000_000_000u128; // 100 tokens
+    let leverage = 10u32;
+    let position_id = position_client.open_position(&trader, &0u32, &collateral, &leverage, &true);
+
+    // Price increases to $1.10 (+10%)
+    set_oracle_price(&env, &oracle_id, &admin, 0, 110_000_000);
+
+    let pnl = position_client.calculate_pnl(&position_id);
+
+    // Long profits when price goes up
+    // Size = 1_000_000_000 * 10 = 10_000_000_000
+    // Price PnL = (110_000_000 - 100_000_000) * 10_000_000_000 / 100_000_000 = 1_000_000_000
+    assert!(pnl > 0, "Long should profit when price increases");
+    assert_eq!(
+        pnl, 1_000_000_000,
+        "PnL should be ~100 tokens (100% of collateral)"
+    );
+}
+
+#[test]
+fn test_calculate_pnl_long_loss() {
+    let env = Env::default();
+    let (
+        _config_id,
+        oracle_id,
+        position_manager_id,
+        _token_address,
+        token_client,
+        _token_admin,
+        admin,
+        trader,
+        _liquidity_pool_id,
+    ) = setup_test_environment(&env);
+
+    let position_client = PositionManagerClient::new(&env, &position_manager_id);
+
+    // Open long position at $1.00
+    let collateral = 1_000_000_000u128;
+    let leverage = 10u32;
+    let position_id = position_client.open_position(&trader, &0u32, &collateral, &leverage, &true);
+
+    // Price decreases to $0.95 (-5%)
+    set_oracle_price(&env, &oracle_id, &admin, 0, 95_000_000);
+
+    let pnl = position_client.calculate_pnl(&position_id);
+
+    // Long loses when price goes down
+    // Size = 10_000_000_000
+    // Price PnL = (95_000_000 - 100_000_000) * 10_000_000_000 / 100_000_000 = -500_000_000
+    assert!(pnl < 0, "Long should lose when price decreases");
+    assert_eq!(
+        pnl, -500_000_000,
+        "PnL should be -50 tokens (50% of collateral)"
+    );
+}
+
+#[test]
+fn test_calculate_pnl_short_profit() {
+    let env = Env::default();
+    let (
+        _config_id,
+        oracle_id,
+        position_manager_id,
+        _token_address,
+        token_client,
+        _token_admin,
+        admin,
+        trader,
+        _liquidity_pool_id,
+    ) = setup_test_environment(&env);
+
+    let position_client = PositionManagerClient::new(&env, &position_manager_id);
+
+    // Open short position at $1.00
+    let collateral = 1_000_000_000u128;
+    let leverage = 10u32;
+    let position_id = position_client.open_position(
+        &trader,
+        &0u32,
+        &collateral,
+        &leverage,
+        &false, // short
+    );
+
+    // Price decreases to $0.90 (-10%)
+    set_oracle_price(&env, &oracle_id, &admin, 0, 90_000_000);
+
+    let pnl = position_client.calculate_pnl(&position_id);
+
+    // Short profits when price goes down
+    // Size = 10_000_000_000
+    // Price PnL = (100_000_000 - 90_000_000) * 10_000_000_000 / 100_000_000 = 1_000_000_000
+    assert!(pnl > 0, "Short should profit when price decreases");
+    assert_eq!(
+        pnl, 1_000_000_000,
+        "PnL should be ~100 tokens (100% of collateral)"
+    );
+}
+
+#[test]
+fn test_calculate_pnl_short_loss() {
+    let env = Env::default();
+    let (
+        _config_id,
+        oracle_id,
+        position_manager_id,
+        _token_address,
+        token_client,
+        _token_admin,
+        admin,
+        trader,
+        _liquidity_pool_id,
+    ) = setup_test_environment(&env);
+
+    let position_client = PositionManagerClient::new(&env, &position_manager_id);
+
+    // Open short position at $1.00
+    let collateral = 1_000_000_000u128;
+    let leverage = 10u32;
+    let position_id = position_client.open_position(
+        &trader,
+        &0u32,
+        &collateral,
+        &leverage,
+        &false, // short
+    );
+
+    // Price increases to $1.05 (+5%)
+    set_oracle_price(&env, &oracle_id, &admin, 0, 105_000_000);
+
+    let pnl = position_client.calculate_pnl(&position_id);
+
+    // Short loses when price goes up
+    // Size = 10_000_000_000
+    // Price PnL = (100_000_000 - 105_000_000) * 10_000_000_000 / 100_000_000 = -500_000_000
+    assert!(pnl < 0, "Short should lose when price increases");
+    assert_eq!(
+        pnl, -500_000_000,
+        "PnL should be -50 tokens (50% of collateral)"
+    );
+}
+
+#[test]
+fn test_calculate_pnl_no_price_change() {
+    let env = Env::default();
+    let (
+        _config_id,
+        _oracle_id,
+        position_manager_id,
+        _token_address,
+        token_client,
+        _token_admin,
+        _admin,
+        trader,
+        _liquidity_pool_id,
+    ) = setup_test_environment(&env);
+
+    let position_client = PositionManagerClient::new(&env, &position_manager_id);
+
+    // Open long position at $1.00
+    let collateral = 1_000_000_000u128;
+    let leverage = 10u32;
+    let position_id = position_client.open_position(&trader, &0u32, &collateral, &leverage, &true);
+
+    // Price stays at $1.00 (no change)
+    let pnl = position_client.calculate_pnl(&position_id);
+
+    // No price change = no PnL (ignoring funding which is 0 at start)
+    assert_eq!(pnl, 0, "PnL should be 0 when price hasn't changed");
+}
+
+#[test]
+fn test_calculate_pnl_different_leverage() {
+    let env = Env::default();
+    let (
+        _config_id,
+        oracle_id,
+        position_manager_id,
+        _token_address,
+        token_client,
+        _token_admin,
+        admin,
+        trader,
+        _liquidity_pool_id,
+    ) = setup_test_environment(&env);
+
+    let position_client = PositionManagerClient::new(&env, &position_manager_id);
+
+    // Open position with 5x leverage
+    let collateral = 1_000_000_000u128;
+    let leverage_5x = 5u32;
+    let position_id_5x =
+        position_client.open_position(&trader, &0u32, &collateral, &leverage_5x, &true);
+
+    // Open position with 20x leverage
+    let leverage_20x = 20u32;
+    let position_id_20x =
+        position_client.open_position(&trader, &0u32, &collateral, &leverage_20x, &true);
+
+    // Price increases 10%
+    set_oracle_price(&env, &oracle_id, &admin, 0, 110_000_000);
+
+    let pnl_5x = position_client.calculate_pnl(&position_id_5x);
+    let pnl_20x = position_client.calculate_pnl(&position_id_20x);
+
+    // 5x: Size = 5_000_000_000, PnL = 10% * 5_000_000_000 = 500_000_000
+    // 20x: Size = 20_000_000_000, PnL = 10% * 20_000_000_000 = 2_000_000_000
+    assert_eq!(pnl_5x, 500_000_000, "5x leverage should yield 50% profit");
+    assert_eq!(
+        pnl_20x, 2_000_000_000,
+        "20x leverage should yield 200% profit"
+    );
+    assert_eq!(pnl_20x, pnl_5x * 4, "20x PnL should be 4x the 5x PnL");
+}
+
+#[test]
+#[should_panic(expected = "Position not found")]
+fn test_calculate_pnl_nonexistent_position() {
+    let env = Env::default();
+    let (
+        _config_id,
+        _oracle_id,
+        position_manager_id,
+        _token_address,
+        _token_client,
+        _token_admin,
+        _admin,
+        _trader,
+        _liquidity_pool_id,
+    ) = setup_test_environment(&env);
+
+    let position_client = PositionManagerClient::new(&env, &position_manager_id);
+
+    // Try to calculate PnL for non-existent position
+    position_client.calculate_pnl(&999u64);
 }

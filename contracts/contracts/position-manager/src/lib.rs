@@ -1965,13 +1965,14 @@ impl PositionManager {
     /// # Returns
     ///
     /// The unrealized PnL (positive for profit, negative for loss)
-    pub fn calculate_pnl(_env: Env, _position_id: u64) -> i128 {
-        // TODO: Implement PnL calculation
-        // - Get position data
-        // - Get current price from OracleIntegrator
-        // - Calculate PnL based on entry price, current price, size, direction
-        // - Apply funding payments
-        0
+    pub fn calculate_pnl(env: Env, position_id: u64) -> i128 {
+        let position = get_position(&env, position_id);
+
+        let oracle = get_oracle(&env);
+        let oracle_client = oracle_integrator::Client::new(&env, &oracle);
+        let current_price = oracle_client.get_price(&position.market_id);
+
+        calculate_pnl(&env, &position, current_price)
     }
 
     /// Get all open position IDs for a specific trader.

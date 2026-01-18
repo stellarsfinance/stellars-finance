@@ -243,8 +243,6 @@ impl MarketManager {
     ///
     /// * `caller` - Address calling this function
     /// * `market_id` - The market identifier
-    ///
-    /// TODO: Bot sollte admin sein? oder kann jeder diese function callen?
     pub fn update_funding_rate(env: Env, caller: Address, market_id: u32) {
         caller.require_auth();
 
