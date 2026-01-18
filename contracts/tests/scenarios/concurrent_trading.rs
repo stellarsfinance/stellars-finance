@@ -22,9 +22,9 @@ fn test_concurrent_position_opens() {
         position_ids.push_back(position_id);
     }
 
-    // Verify position IDs are sequential
+    // Verify position IDs are sequential (starting from 1)
     for i in 0..5 {
-        assert_eq!(position_ids.get(i).unwrap(), i as u64);
+        assert_eq!(position_ids.get(i).unwrap(), (i + 1) as u64);
     }
 
     // Verify each user has exactly 1 position tracked
@@ -150,9 +150,9 @@ fn test_position_id_uniqueness() {
         all_position_ids.push_back(pos_id);
     }
 
-    // Verify all IDs are unique and sequential
+    // Verify all IDs are unique and sequential (starting from 1)
     for i in 0..10 {
-        assert_eq!(all_position_ids.get(i).unwrap(), i as u64);
+        assert_eq!(all_position_ids.get(i).unwrap(), (i + 1) as u64);
     }
 
     // Verify position count per user

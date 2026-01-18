@@ -300,12 +300,12 @@ fn remove_position(env: &Env, position_id: u64) {
         .remove(&DataKey::Position(position_id));
 }
 
-/// Get the next position ID
+/// Get the next position ID (starts at 1 since 0 means "no position" for orders)
 fn get_next_position_id(env: &Env) -> u64 {
     env.storage()
         .instance()
         .get(&DataKey::NextPositionId)
-        .unwrap_or(0)
+        .unwrap_or(1)
 }
 
 /// Increment and return the next position ID
@@ -390,12 +390,12 @@ fn remove_order(env: &Env, order_id: u64) {
         .remove(&DataKey::Order(order_id));
 }
 
-/// Get the next order ID
+/// Get the next order ID (starts at 1 for consistency with position IDs)
 fn get_next_order_id(env: &Env) -> u64 {
     env.storage()
         .instance()
         .get(&DataKey::NextOrderId)
-        .unwrap_or(0)
+        .unwrap_or(1)
 }
 
 /// Increment and return the next order ID
@@ -647,13 +647,12 @@ fn cancel_position_attached_orders(env: &Env, position_id: u64, reason: OrderCan
 
 /// Execute a limit order - opens a new position
 fn execute_limit_order(env: &Env, order: &Order, _current_price: i128) -> i128 {
-    // Transfer collateral from trader to pool
-    // Note: Trader must have pre-approved this transfer
-    let token = get_token(env);
-    let token_client = token::Client::new(env, &token);
     let pool_address = get_liquidity_pool(env);
 
-    token_client.transfer(&order.trader, &pool_address, &(order.collateral as i128));
+    // Transfer escrowed collateral from contract to pool
+    let token = get_token(env);
+    let token_client = token::Client::new(env, &token);
+    token_client.transfer(&env.current_contract_address(), &pool_address, &(order.collateral as i128));
 
     // Get oracle for entry price
     let oracle_address = get_oracle(env);
@@ -698,11 +697,10 @@ fn execute_limit_order(env: &Env, order: &Order, _current_price: i128) -> i128 {
         }
     }
 
-    // Deposit collateral to pool and reserve liquidity
-    pool_client.deposit_position_collateral(
+    // Record collateral in pool (already transferred above) and reserve liquidity
+    pool_client.record_position_collateral(
         &env.current_contract_address(),
         &position_id,
-        &order.trader,
         &order.collateral,
     );
     pool_client.reserve_liquidity(
@@ -794,21 +792,24 @@ fn execute_sl_tp_order(env: &Env, order: &Order, current_price: i128) -> i128 {
     };
 
     // Close position (partial or full)
+    // Pass the executing order_id so we don't refund its fee (keeper gets it instead)
     if size_to_close >= position.size {
         // Full close - use close_position logic
-        execute_full_close(env, order.position_id, &position, current_price)
+        execute_full_close(env, order.position_id, &position, current_price, Some(order.order_id))
     } else {
         // Partial close - use decrease_position logic
-        execute_partial_close(env, order.position_id, &position, size_to_close, current_price)
+        execute_partial_close(env, order.position_id, &position, size_to_close, current_price, Some(order.order_id))
     }
 }
 
 /// Execute a full position close (internal, for order execution)
+/// `executing_order_id` is the order currently being executed - skip refunding its fee
 fn execute_full_close(
     env: &Env,
     position_id: u64,
     position: &Position,
     current_price: i128,
+    executing_order_id: Option<u64>,
 ) -> i128 {
     // Calculate comprehensive PnL
     let pnl = calculate_pnl(env, position, current_price);
@@ -860,10 +861,16 @@ fn execute_full_close(
     );
 
     // Cancel any other attached orders (except the one being executed)
-    // Note: The executing order is cleaned up by the caller
+    // The executing order is cleaned up by the caller and its fee goes to keeper
     let order_ids = get_position_orders_list(env, position_id);
     for i in 0..order_ids.len() {
         let other_order_id = order_ids.get(i).unwrap();
+        // Skip the currently executing order - its fee goes to the keeper
+        if let Some(exec_id) = executing_order_id {
+            if other_order_id == exec_id {
+                continue;
+            }
+        }
         if order_exists(env, other_order_id) {
             let other_order = get_order_from_storage(env, other_order_id);
 
@@ -908,12 +915,14 @@ fn execute_full_close(
 }
 
 /// Execute a partial position close (internal, for order execution)
+/// `_executing_order_id` is unused for partial close but kept for API consistency
 fn execute_partial_close(
     env: &Env,
     position_id: u64,
     position: &Position,
     size_to_reduce: u128,
     current_price: i128,
+    _executing_order_id: Option<u64>,
 ) -> i128 {
     let pool_address = get_liquidity_pool(env);
     let pool_client = liquidity_pool::Client::new(env, &pool_address);
@@ -1107,12 +1116,16 @@ fn calculate_pnl(env: &Env, position: &Position, current_price: i128) -> i128 {
     let size_i128 = position.size as i128;
 
     // 1. Calculate Price PnL
+    // Size is in notional token units (collateral * leverage)
+    // To get asset units: size / entry_price
+    // PnL = price_diff * (size / entry_price)
+    // Reordering to avoid precision loss: (price_diff * size) / entry_price
     let price_diff = if position.is_long {
         current_price - position.entry_price
     } else {
         position.entry_price - current_price
     };
-    let price_pnl = (price_diff * size_i128) / 10_000_000; // Divide by 1e7 for scaling
+    let price_pnl = (price_diff * size_i128) / position.entry_price;
 
     // 2. Calculate Funding Payments
     let market_manager = get_market_manager(env);
@@ -1182,10 +1195,10 @@ impl PositionManager {
             .instance()
             .set(&DataKey::ConfigManager, &config_manager);
 
-        // Initialize the next position ID to 0
+        // Initialize the next position ID to 1 (0 means "no position" for orders)
         env.storage()
             .instance()
-            .set(&DataKey::NextPositionId, &0u64);
+            .set(&DataKey::NextPositionId, &1u64);
     }
 
     /// Open a new perpetual position.
@@ -2056,13 +2069,14 @@ impl PositionManager {
             .expect("Size overflow");
         validate_position_size(&env, size);
 
-        // Transfer execution fee from trader to contract
+        // Transfer execution fee AND collateral from trader to contract (escrow)
         let token = get_token(&env);
         let token_client = token::Client::new(&env, &token);
+        let total_escrow = execution_fee + collateral;
         token_client.transfer(
             &trader,
             &env.current_contract_address(),
-            &(execution_fee as i128),
+            &(total_escrow as i128),
         );
 
         // Create order
@@ -2350,13 +2364,19 @@ impl PositionManager {
             panic!("Unauthorized: caller does not own this order");
         }
 
-        // Refund execution fee
+        // Refund execution fee (and collateral for limit orders)
         let token = get_token(&env);
         let token_client = token::Client::new(&env, &token);
+
+        let refund_amount = match order.order_type {
+            OrderType::Limit => order.execution_fee + order.collateral, // Limit orders escrow collateral
+            _ => order.execution_fee, // SL/TP only escrow execution fee
+        };
+
         token_client.transfer(
             &env.current_contract_address(),
             &trader,
-            &(order.execution_fee as i128),
+            &(refund_amount as i128),
         );
 
         // Clean up storage

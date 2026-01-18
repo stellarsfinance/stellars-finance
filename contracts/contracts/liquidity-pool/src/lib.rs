@@ -566,6 +566,32 @@ impl LiquidityPool {
         put_position_collateral(&env, position_id, current + amount);
     }
 
+    /// Record position collateral that was already transferred to the pool.
+    /// Used by limit orders where collateral is escrowed in position manager
+    /// and then transferred directly to pool.
+    ///
+    /// # Arguments
+    ///
+    /// * `position_manager` - The Position Manager contract address
+    /// * `position_id` - The position ID
+    /// * `amount` - The collateral amount to record
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the authorized position manager
+    pub fn record_position_collateral(
+        env: Env,
+        position_manager: Address,
+        position_id: u64,
+        amount: u128,
+    ) {
+        require_position_manager(&env, &position_manager);
+
+        // Just track collateral - assumes tokens already transferred
+        let current = get_position_collateral(&env, position_id);
+        put_position_collateral(&env, position_id, current + amount);
+    }
+
     /// Withdraw collateral for a position (when closing).
     ///
     /// # Arguments
