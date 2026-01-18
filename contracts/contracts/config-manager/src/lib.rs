@@ -55,6 +55,8 @@ pub enum DataKey {
     // Liquidity parameters
     MaxUtilizationRatio,
     MinLiquidityReserveRatio,
+    // Borrowing parameters
+    BorrowRatePerSecond,
 }
 
 #[contract]
@@ -147,6 +149,10 @@ impl ConfigManager {
         // Liquidity parameters (in basis points)
         put_config_value(&env, &DataKey::MaxUtilizationRatio, 8000); // 80%
         put_config_value(&env, &DataKey::MinLiquidityReserveRatio, 2000); // 20%
+
+        // Borrowing parameters (rate per second scaled by 1e7)
+        // Default: 1 = 0.0000001% per second (~3.15% APR)
+        put_config_value(&env, &DataKey::BorrowRatePerSecond, 1);
     }
 
     /// Update the admin address.
@@ -497,6 +503,33 @@ impl ConfigManager {
             panic!("invalid reserve ratio");
         }
         put_config_value(&env, &DataKey::MinLiquidityReserveRatio, ratio);
+    }
+
+    /// Get borrow rate per second (scaled by 1e7).
+    ///
+    /// # Returns
+    ///
+    /// Borrow rate per second for calculating borrowing fees
+    pub fn borrow_rate_per_second(env: Env) -> i128 {
+        get_config_value(&env, &DataKey::BorrowRatePerSecond)
+    }
+
+    /// Set borrow rate per second.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` - The administrator address
+    /// * `rate` - Borrow rate per second (scaled by 1e7, must be >= 0)
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not the admin or rate is negative
+    pub fn set_borrow_rate_per_second(env: Env, admin: Address, rate: i128) {
+        require_admin(&env, &admin);
+        if rate < 0 {
+            panic!("borrow rate must be >= 0");
+        }
+        put_config_value(&env, &DataKey::BorrowRatePerSecond, rate);
     }
 
     /// Set leverage limits.

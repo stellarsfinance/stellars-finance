@@ -2,7 +2,7 @@
 
 use super::*;
 use soroban_sdk::log;
-use soroban_sdk::{testutils::Address as _, token, Address, Env, Map};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, token, Address, Env, Map};
 
 // Import the actual contracts for integration testing
 use crate::config_manager;
@@ -2728,4 +2728,51 @@ fn test_calculate_pnl_nonexistent_position() {
 
     // Try to calculate PnL for non-existent position
     position_client.calculate_pnl(&999u64);
+}
+
+#[test]
+fn test_calculate_pnl_with_borrowing_fee() {
+    let env = Env::default();
+    let (
+        config_id,
+        oracle_id,
+        position_manager_id,
+        _token_address,
+        _token_client,
+        _token_admin,
+        admin,
+        trader,
+        _liquidity_pool_id,
+    ) = setup_test_environment(&env);
+
+    let position_client = PositionManagerClient::new(&env, &position_manager_id);
+    let config_client = config_manager::Client::new(&env, &config_id);
+    let oracle_client = oracle_integrator::Client::new(&env, &oracle_id);
+
+    // Enable fixed price mode to prevent price oscillation during time advancement
+    oracle_client.set_fixed_price_mode(&admin, &true);
+
+    // Set a higher borrow rate for visible effect: 100 units per second
+    config_client.set_borrow_rate_per_second(&admin, &100);
+
+    // Open long position at $1.00
+    let collateral = 1_000_000_000u128;
+    let leverage = 10u32;
+    let position_id = position_client.open_position(&trader, &0u32, &collateral, &leverage, &true);
+
+    // Advance time by 100 seconds
+    env.ledger().with_mut(|li| {
+        li.timestamp += 100;
+    });
+
+    // Calculate PnL - should include borrowing fees
+    // Size = collateral * leverage = 1_000_000_000 * 10 = 10_000_000_000
+    // Borrowing fee = (rate * time_elapsed * size) / 10_000_000
+    //               = (100 * 100 * 10_000_000_000) / 10_000_000
+    //               = 100_000_000_000_000 / 10_000_000 = 10_000_000
+    let pnl = position_client.calculate_pnl(&position_id);
+
+    // With no price change, PnL should be negative due to borrowing fee
+    assert!(pnl < 0, "PnL should be negative due to borrowing fees, got: {}", pnl);
+    assert_eq!(pnl, -10_000_000, "Borrowing fee should be 10_000_000, got: {}", pnl);
 }

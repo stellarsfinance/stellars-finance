@@ -1141,16 +1141,12 @@ fn calculate_pnl(env: &Env, position: &Position, current_price: i128) -> i128 {
     };
 
     // 3. Calculate Borrowing Fees
-    // TODO: Uncomment when ConfigManager adds borrow_rate_per_second()
-    // let config_manager = get_config_manager(env);
-    // let config_client = config_manager::Client::new(env, &config_manager);
-    // let borrow_rate_per_second = config_client.borrow_rate_per_second() as i128;
-    // let current_timestamp = env.ledger().timestamp();
-    // let time_elapsed = (current_timestamp - position.last_interaction) as i128;
-    // let borrowing_fee = (borrow_rate_per_second * time_elapsed * size_i128) / 10_000_000;
-
-    // For now, borrowing fees are 0 (not yet implemented in ConfigManager)
-    let borrowing_fee = 0;
+    let config_manager = get_config_manager(env);
+    let config_client = config_manager::Client::new(env, &config_manager);
+    let borrow_rate_per_second = config_client.borrow_rate_per_second() as i128;
+    let current_timestamp = env.ledger().timestamp();
+    let time_elapsed = (current_timestamp - position.last_interaction) as i128;
+    let borrowing_fee = (borrow_rate_per_second * time_elapsed * size_i128) / 10_000_000;
 
     // Net PnL = Price PnL - Funding Payments - Borrowing Fees
     // (funding_payment and borrowing_fee are costs, so subtract)

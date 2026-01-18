@@ -172,3 +172,43 @@ fn test_registry_update_addresses() {
     client.set_liquidity_pool(&admin, &lp_contract_v2);
     assert_eq!(client.liquidity_pool(), lp_contract_v2);
 }
+
+#[test]
+fn test_borrow_rate_per_second() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+
+    let contract_id = env.register(ConfigManager, ());
+    let client = ConfigManagerClient::new(&env, &contract_id);
+
+    client.initialize(&admin);
+
+    // Check default value
+    assert_eq!(client.borrow_rate_per_second(), 1);
+
+    // Update borrow rate
+    client.set_borrow_rate_per_second(&admin, &100);
+    assert_eq!(client.borrow_rate_per_second(), 100);
+
+    // Set to zero (disable borrowing fees)
+    client.set_borrow_rate_per_second(&admin, &0);
+    assert_eq!(client.borrow_rate_per_second(), 0);
+}
+
+#[test]
+#[should_panic(expected = "borrow rate must be >= 0")]
+fn test_borrow_rate_negative_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+
+    let contract_id = env.register(ConfigManager, ());
+    let client = ConfigManagerClient::new(&env, &contract_id);
+
+    client.initialize(&admin);
+
+    client.set_borrow_rate_per_second(&admin, &-1);
+}
