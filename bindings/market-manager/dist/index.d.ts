@@ -270,8 +270,6 @@ export interface Client {
      *
      * * `caller` - Address calling this function
      * * `market_id` - The market identifier
-     *
-     * TODO: Bot sollte admin sein? oder kann jeder diese function callen?
      */
     update_funding_rate: ({ caller, market_id }: {
         caller: string;

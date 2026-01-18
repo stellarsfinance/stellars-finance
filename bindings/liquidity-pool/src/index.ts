@@ -304,6 +304,37 @@ export interface Client {
   }) => Promise<AssembledTransaction<null>>
 
   /**
+   * Construct and simulate a settle_trader_pnl transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Settle trader PnL by transferring profit from pool reserves.
+   * 
+   * # Arguments
+   * 
+   * * `position_manager` - The Position Manager contract address
+   * * `trader` - The trader's address
+   * * `pnl` - The PnL amount (positive = profit to pay trader)
+   * 
+   * # Panics
+   * 
+   * Panics if caller is not the authorized position manager
+   */
+  settle_trader_pnl: ({position_manager, trader, pnl}: {position_manager: string, trader: string, pnl: i128}, options?: {
+    /**
+     * The fee to pay for the transaction. Default: BASE_FEE
+     */
+    fee?: number;
+
+    /**
+     * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+     */
+    timeoutInSeconds?: number;
+
+    /**
+     * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+     */
+    simulate?: boolean;
+  }) => Promise<AssembledTransaction<null>>
+
+  /**
    * Construct and simulate a get_total_deposits transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Get the total amount of tokens deposited in the pool.
    * 
@@ -463,6 +494,39 @@ export interface Client {
   }) => Promise<AssembledTransaction<u128>>
 
   /**
+   * Construct and simulate a record_position_collateral transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Record position collateral that was already transferred to the pool.
+   * Used by limit orders where collateral is escrowed in position manager
+   * and then transferred directly to pool.
+   * 
+   * # Arguments
+   * 
+   * * `position_manager` - The Position Manager contract address
+   * * `position_id` - The position ID
+   * * `amount` - The collateral amount to record
+   * 
+   * # Panics
+   * 
+   * Panics if caller is not the authorized position manager
+   */
+  record_position_collateral: ({position_manager, position_id, amount}: {position_manager: string, position_id: u64, amount: u128}, options?: {
+    /**
+     * The fee to pay for the transaction. Default: BASE_FEE
+     */
+    fee?: number;
+
+    /**
+     * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+     */
+    timeoutInSeconds?: number;
+
+    /**
+     * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+     */
+    simulate?: boolean;
+  }) => Promise<AssembledTransaction<null>>
+
+  /**
    * Construct and simulate a deposit_position_collateral transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Deposit collateral for a position.
    * 
@@ -554,12 +618,14 @@ export class Client extends ContractClient {
         "AAAAAAAAAFtHZXQgdGhlIHRvdGFsIG51bWJlciBvZiBMUCBzaGFyZXMgaW4gY2lyY3VsYXRpb24uCgojIFJldHVybnMKClRoZSB0b3RhbCBudW1iZXIgb2YgTFAgc2hhcmVzAAAAABBnZXRfdG90YWxfc2hhcmVzAAAAAAAAAAEAAAAL",
         "AAAAAAAAARVSZWxlYXNlIGxpcXVpZGl0eSB3aGVuIGEgcG9zaXRpb24gaXMgY2xvc2VkLgoKIyBBcmd1bWVudHMKCiogYHBvc2l0aW9uX21hbmFnZXJgIC0gVGhlIFBvc2l0aW9uIE1hbmFnZXIgY29udHJhY3QgYWRkcmVzcwoqIGBwb3NpdGlvbl9pZGAgLSBUaGUgcG9zaXRpb24gSUQKKiBgc2l6ZWAgLSBUaGUgcG9zaXRpb24gc2l6ZSAobm90aW9uYWwgdmFsdWUpIHRvIHJlbGVhc2UKCiMgUGFuaWNzCgpQYW5pY3MgaWYgY2FsbGVyIGlzIG5vdCB0aGUgYXV0aG9yaXplZCBwb3NpdGlvbiBtYW5hZ2VyAAAAAAAAEXJlbGVhc2VfbGlxdWlkaXR5AAAAAAAAAwAAAAAAAAAQcG9zaXRpb25fbWFuYWdlcgAAABMAAAAAAAAAC3Bvc2l0aW9uX2lkAAAAAAYAAAAAAAAABHNpemUAAAAKAAAAAA==",
         "AAAAAAAAAUZSZXNlcnZlIGxpcXVpZGl0eSB3aGVuIGEgcG9zaXRpb24gaXMgb3BlbmVkLgoKIyBBcmd1bWVudHMKCiogYHBvc2l0aW9uX21hbmFnZXJgIC0gVGhlIFBvc2l0aW9uIE1hbmFnZXIgY29udHJhY3QgYWRkcmVzcwoqIGBwb3NpdGlvbl9pZGAgLSBUaGUgcG9zaXRpb24gSUQKKiBgc2l6ZWAgLSBUaGUgcG9zaXRpb24gc2l6ZSAobm90aW9uYWwgdmFsdWUpIHRvIHJlc2VydmUKKiBgY29sbGF0ZXJhbGAgLSBUaGUgY29sbGF0ZXJhbCBhbW91bnQgZGVwb3NpdGVkCgojIFBhbmljcwoKUGFuaWNzIGlmIGNhbGxlciBpcyBub3QgdGhlIGF1dGhvcml6ZWQgcG9zaXRpb24gbWFuYWdlcgAAAAAAEXJlc2VydmVfbGlxdWlkaXR5AAAAAAAABAAAAAAAAAAQcG9zaXRpb25fbWFuYWdlcgAAABMAAAAAAAAAC3Bvc2l0aW9uX2lkAAAAAAYAAAAAAAAABHNpemUAAAAKAAAAAAAAAApjb2xsYXRlcmFsAAAAAAAKAAAAAA==",
+        "AAAAAAAAASdTZXR0bGUgdHJhZGVyIFBuTCBieSB0cmFuc2ZlcnJpbmcgcHJvZml0IGZyb20gcG9vbCByZXNlcnZlcy4KCiMgQXJndW1lbnRzCgoqIGBwb3NpdGlvbl9tYW5hZ2VyYCAtIFRoZSBQb3NpdGlvbiBNYW5hZ2VyIGNvbnRyYWN0IGFkZHJlc3MKKiBgdHJhZGVyYCAtIFRoZSB0cmFkZXIncyBhZGRyZXNzCiogYHBubGAgLSBUaGUgUG5MIGFtb3VudCAocG9zaXRpdmUgPSBwcm9maXQgdG8gcGF5IHRyYWRlcikKCiMgUGFuaWNzCgpQYW5pY3MgaWYgY2FsbGVyIGlzIG5vdCB0aGUgYXV0aG9yaXplZCBwb3NpdGlvbiBtYW5hZ2VyAAAAABFzZXR0bGVfdHJhZGVyX3BubAAAAAAAAAMAAAAAAAAAEHBvc2l0aW9uX21hbmFnZXIAAAATAAAAAAAAAAZ0cmFkZXIAAAAAABMAAAAAAAAAA3BubAAAAAALAAAAAA==",
         "AAAAAAAAAGJHZXQgdGhlIHRvdGFsIGFtb3VudCBvZiB0b2tlbnMgZGVwb3NpdGVkIGluIHRoZSBwb29sLgoKIyBSZXR1cm5zCgpUaGUgdG90YWwgZGVwb3NpdGVkIHRva2VuIGFtb3VudAAAAAAAEmdldF90b3RhbF9kZXBvc2l0cwAAAAAAAAAAAAEAAAAL",
         "AAAAAAAAAP9TZXQgdGhlIGF1dGhvcml6ZWQgcG9zaXRpb24gbWFuYWdlciB0aGF0IGNhbiByZXNlcnZlL3JlbGVhc2UgbGlxdWlkaXR5LgoKIyBBcmd1bWVudHMKCiogYGFkbWluYCAtIFRoZSBhZG1pbiBhZGRyZXNzIChtdXN0IG1hdGNoIENvbmZpZ01hbmFnZXIgYWRtaW4pCiogYHBvc2l0aW9uX21hbmFnZXJgIC0gVGhlIFBvc2l0aW9uIE1hbmFnZXIgY29udHJhY3QgYWRkcmVzcwoKIyBQYW5pY3MKClBhbmljcyBpZiBjYWxsZXIgaXMgbm90IGF1dGhvcml6ZWQAAAAAFHNldF9wb3NpdGlvbl9tYW5hZ2VyAAAAAgAAAAAAAAAFYWRtaW4AAAAAAAATAAAAAAAAABBwb3NpdGlvbl9tYW5hZ2VyAAAAEwAAAAA=",
         "AAAAAAAAAHRHZXQgdGhlIHBvb2wgdXRpbGl6YXRpb24gcmF0aW8gaW4gYmFzaXMgcG9pbnRzLgoKIyBSZXR1cm5zCgpUaGUgdXRpbGl6YXRpb24gcmF0aW8gaW4gYmFzaXMgcG9pbnRzIChlLmcuLCA4MDAwID0gODAlKQAAABVnZXRfdXRpbGl6YXRpb25fcmF0aW8AAAAAAAAAAAAAAQAAAAQ=",
         "AAAAAAAAAF1HZXQgdGhlIHRvdGFsIHJlc2VydmVkIGxpcXVpZGl0eS4KCiMgUmV0dXJucwoKVGhlIHRvdGFsIGxpcXVpZGl0eSByZXNlcnZlZCBmb3Igb3BlbiBwb3NpdGlvbnMAAAAAAAAWZ2V0X3Jlc2VydmVkX2xpcXVpZGl0eQAAAAAAAAAAAAEAAAAK",
         "AAAAAAAAAHtHZXQgdGhlIGF2YWlsYWJsZSBsaXF1aWRpdHkgKHRvdGFsIGJhbGFuY2UgLSByZXNlcnZlZCkuCgojIFJldHVybnMKClRoZSBsaXF1aWRpdHkgYXZhaWxhYmxlIGZvciB3aXRoZHJhd2FsIG9yIG5ldyBwb3NpdGlvbnMAAAAAF2dldF9hdmFpbGFibGVfbGlxdWlkaXR5AAAAAAAAAAABAAAACw==",
         "AAAAAAAAAJhHZXQgdGhlIGNvbGxhdGVyYWwgZGVwb3NpdGVkIGZvciBhIHNwZWNpZmljIHBvc2l0aW9uLgoKIyBBcmd1bWVudHMKCiogYHBvc2l0aW9uX2lkYCAtIFRoZSBwb3NpdGlvbiBJRAoKIyBSZXR1cm5zCgpUaGUgY29sbGF0ZXJhbCBhbW91bnQgZm9yIHRoZSBwb3NpdGlvbgAAABdnZXRfcG9zaXRpb25fY29sbGF0ZXJhbAAAAAABAAAAAAAAAAtwb3NpdGlvbl9pZAAAAAAGAAAAAQAAAAo=",
+        "AAAAAAAAAY5SZWNvcmQgcG9zaXRpb24gY29sbGF0ZXJhbCB0aGF0IHdhcyBhbHJlYWR5IHRyYW5zZmVycmVkIHRvIHRoZSBwb29sLgpVc2VkIGJ5IGxpbWl0IG9yZGVycyB3aGVyZSBjb2xsYXRlcmFsIGlzIGVzY3Jvd2VkIGluIHBvc2l0aW9uIG1hbmFnZXIKYW5kIHRoZW4gdHJhbnNmZXJyZWQgZGlyZWN0bHkgdG8gcG9vbC4KCiMgQXJndW1lbnRzCgoqIGBwb3NpdGlvbl9tYW5hZ2VyYCAtIFRoZSBQb3NpdGlvbiBNYW5hZ2VyIGNvbnRyYWN0IGFkZHJlc3MKKiBgcG9zaXRpb25faWRgIC0gVGhlIHBvc2l0aW9uIElECiogYGFtb3VudGAgLSBUaGUgY29sbGF0ZXJhbCBhbW91bnQgdG8gcmVjb3JkCgojIFBhbmljcwoKUGFuaWNzIGlmIGNhbGxlciBpcyBub3QgdGhlIGF1dGhvcml6ZWQgcG9zaXRpb24gbWFuYWdlcgAAAAAAGnJlY29yZF9wb3NpdGlvbl9jb2xsYXRlcmFsAAAAAAADAAAAAAAAABBwb3NpdGlvbl9tYW5hZ2VyAAAAEwAAAAAAAAALcG9zaXRpb25faWQAAAAABgAAAAAAAAAGYW1vdW50AAAAAAAKAAAAAA==",
         "AAAAAAAAASJEZXBvc2l0IGNvbGxhdGVyYWwgZm9yIGEgcG9zaXRpb24uCgojIEFyZ3VtZW50cwoKKiBgcG9zaXRpb25fbWFuYWdlcmAgLSBUaGUgUG9zaXRpb24gTWFuYWdlciBjb250cmFjdCBhZGRyZXNzCiogYHBvc2l0aW9uX2lkYCAtIFRoZSBwb3NpdGlvbiBJRAoqIGB0cmFkZXJgIC0gVGhlIHRyYWRlcidzIGFkZHJlc3MKKiBgYW1vdW50YCAtIFRoZSBjb2xsYXRlcmFsIGFtb3VudCB0byBkZXBvc2l0CgojIFBhbmljcwoKUGFuaWNzIGlmIGNhbGxlciBpcyBub3QgdGhlIGF1dGhvcml6ZWQgcG9zaXRpb24gbWFuYWdlcgAAAAAAG2RlcG9zaXRfcG9zaXRpb25fY29sbGF0ZXJhbAAAAAAEAAAAAAAAABBwb3NpdGlvbl9tYW5hZ2VyAAAAEwAAAAAAAAALcG9zaXRpb25faWQAAAAABgAAAAAAAAAGdHJhZGVyAAAAAAATAAAAAAAAAAZhbW91bnQAAAAAAAoAAAAA",
         "AAAAAAAAATNXaXRoZHJhdyBjb2xsYXRlcmFsIGZvciBhIHBvc2l0aW9uICh3aGVuIGNsb3NpbmcpLgoKIyBBcmd1bWVudHMKCiogYHBvc2l0aW9uX21hbmFnZXJgIC0gVGhlIFBvc2l0aW9uIE1hbmFnZXIgY29udHJhY3QgYWRkcmVzcwoqIGBwb3NpdGlvbl9pZGAgLSBUaGUgcG9zaXRpb24gSUQKKiBgdHJhZGVyYCAtIFRoZSB0cmFkZXIncyBhZGRyZXNzCiogYGFtb3VudGAgLSBUaGUgY29sbGF0ZXJhbCBhbW91bnQgdG8gd2l0aGRyYXcKCiMgUGFuaWNzCgpQYW5pY3MgaWYgY2FsbGVyIGlzIG5vdCB0aGUgYXV0aG9yaXplZCBwb3NpdGlvbiBtYW5hZ2VyAAAAABx3aXRoZHJhd19wb3NpdGlvbl9jb2xsYXRlcmFsAAAABAAAAAAAAAAQcG9zaXRpb25fbWFuYWdlcgAAABMAAAAAAAAAC3Bvc2l0aW9uX2lkAAAAAAYAAAAAAAAABnRyYWRlcgAAAAAAEwAAAAAAAAAGYW1vdW50AAAAAAAKAAAAAA==" ]),
       options
@@ -575,12 +641,14 @@ export class Client extends ContractClient {
         get_total_shares: this.txFromJSON<i128>,
         release_liquidity: this.txFromJSON<null>,
         reserve_liquidity: this.txFromJSON<null>,
+        settle_trader_pnl: this.txFromJSON<null>,
         get_total_deposits: this.txFromJSON<i128>,
         set_position_manager: this.txFromJSON<null>,
         get_utilization_ratio: this.txFromJSON<u32>,
         get_reserved_liquidity: this.txFromJSON<u128>,
         get_available_liquidity: this.txFromJSON<i128>,
         get_position_collateral: this.txFromJSON<u128>,
+        record_position_collateral: this.txFromJSON<null>,
         deposit_position_collateral: this.txFromJSON<null>,
         withdraw_position_collateral: this.txFromJSON<null>
   }

@@ -68,8 +68,8 @@ export type DataKey = {
     tag: "MinLiquidityReserveRatio";
     values: void;
 } | {
-    tag: "Config";
-    values: readonly [string];
+    tag: "BorrowRatePerSecond";
+    values: void;
 };
 export interface Client {
     /**
@@ -116,6 +116,40 @@ export interface Client {
          */
         simulate?: boolean;
     }) => Promise<AssembledTransaction<string>>;
+    /**
+     * Construct and simulate a set_fees transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Set fee parameters in basis points.
+     *
+     * # Arguments
+     *
+     * * `admin` - The administrator address
+     * * `maker_fee` - Maker fee in basis points (max 1000 = 10%)
+     * * `taker_fee` - Taker fee in basis points (max 1000 = 10%)
+     * * `liquidation_fee` - Liquidation fee in basis points (max 1000 = 10%)
+     *
+     * # Panics
+     *
+     * Panics if caller is not the admin or fees are invalid
+     */
+    set_fees: ({ admin, maker_fee, taker_fee, liquidation_fee }: {
+        admin: string;
+        maker_fee: i128;
+        taker_fee: i128;
+        liquidation_fee: i128;
+    }, options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<null>>;
     /**
      * Construct and simulate a set_admin transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
      * Update the admin address.
@@ -199,34 +233,6 @@ export interface Client {
         simulate?: boolean;
     }) => Promise<AssembledTransaction<string>>;
     /**
-     * Construct and simulate a get_config transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-     * Get a configuration parameter using a Symbol key.
-     *
-     * # Arguments
-     *
-     * * `key` - The configuration parameter key
-     *
-     * # Returns
-     *
-     * The parameter value, or 0 if not set
-     */
-    get_config: ({ key }: {
-        key: string;
-    }, options?: {
-        /**
-         * The fee to pay for the transaction. Default: BASE_FEE
-         */
-        fee?: number;
-        /**
-         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
-         */
-        timeoutInSeconds?: number;
-        /**
-         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
-         */
-        simulate?: boolean;
-    }) => Promise<AssembledTransaction<i128>>;
-    /**
      * Construct and simulate a initialize transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
      * Initialize the configuration contract with admin.
      *
@@ -240,38 +246,6 @@ export interface Client {
      */
     initialize: ({ admin }: {
         admin: string;
-    }, options?: {
-        /**
-         * The fee to pay for the transaction. Default: BASE_FEE
-         */
-        fee?: number;
-        /**
-         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
-         */
-        timeoutInSeconds?: number;
-        /**
-         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
-         */
-        simulate?: boolean;
-    }) => Promise<AssembledTransaction<null>>;
-    /**
-     * Construct and simulate a set_config transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-     * Set a configuration parameter using a Symbol key.
-     *
-     * # Arguments
-     *
-     * * `admin` - The administrator address (must match stored admin)
-     * * `key` - The configuration parameter key
-     * * `value` - The new value for the parameter
-     *
-     * # Panics
-     *
-     * Panics if caller is not the admin
-     */
-    set_config: ({ admin, key, value }: {
-        admin: string;
-        key: string;
-        value: i128;
     }, options?: {
         /**
          * The fee to pay for the transaction. Default: BASE_FEE
@@ -449,19 +423,23 @@ export interface Client {
         simulate?: boolean;
     }) => Promise<AssembledTransaction<null>>;
     /**
-     * Construct and simulate a get_time_config transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-     * Get a time-based configuration parameter using a Symbol key.
+     * Construct and simulate a set_risk_params transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Set risk parameters.
      *
      * # Arguments
      *
-     * * `key` - The configuration parameter key
+     * * `admin` - The administrator address
+     * * `liquidation_threshold` - Liquidation threshold in bps (must be > maintenance_margin)
+     * * `maintenance_margin` - Maintenance margin in bps (must be > 0)
      *
-     * # Returns
+     * # Panics
      *
-     * The parameter value as u64, or 0 if not set
+     * Panics if caller is not the admin or parameters are invalid
      */
-    get_time_config: ({ key }: {
-        key: string;
+    set_risk_params: ({ admin, liquidation_threshold, maintenance_margin }: {
+        admin: string;
+        liquidation_threshold: i128;
+        maintenance_margin: i128;
     }, options?: {
         /**
          * The fee to pay for the transaction. Default: BASE_FEE
@@ -475,7 +453,39 @@ export interface Client {
          * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
          */
         simulate?: boolean;
-    }) => Promise<AssembledTransaction<u64>>;
+    }) => Promise<AssembledTransaction<null>>;
+    /**
+     * Construct and simulate a set_time_params transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Set time parameters.
+     *
+     * # Arguments
+     *
+     * * `admin` - The administrator address
+     * * `funding_interval` - Funding interval in seconds (must be >= 1)
+     * * `staleness_threshold` - Price staleness threshold in seconds (must be >= 1)
+     *
+     * # Panics
+     *
+     * Panics if caller is not the admin or parameters are invalid
+     */
+    set_time_params: ({ admin, funding_interval, staleness_threshold }: {
+        admin: string;
+        funding_interval: u64;
+        staleness_threshold: u64;
+    }, options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<null>>;
     /**
      * Construct and simulate a funding_interval transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
      * Get funding interval in seconds.
@@ -691,6 +701,38 @@ export interface Client {
         simulate?: boolean;
     }) => Promise<AssembledTransaction<i128>>;
     /**
+     * Construct and simulate a set_leverage_limits transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Set leverage limits.
+     *
+     * # Arguments
+     *
+     * * `admin` - The administrator address
+     * * `min_leverage` - Minimum leverage (must be >= 1)
+     * * `max_leverage` - Maximum leverage (must be > min_leverage and <= 100)
+     *
+     * # Panics
+     *
+     * Panics if caller is not the admin or limits are invalid
+     */
+    set_leverage_limits: ({ admin, min_leverage, max_leverage }: {
+        admin: string;
+        min_leverage: i128;
+        max_leverage: i128;
+    }, options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<null>>;
+    /**
      * Construct and simulate a set_position_manager transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
      * Set the Position Manager contract address.
      *
@@ -795,6 +837,36 @@ export interface Client {
         simulate?: boolean;
     }) => Promise<AssembledTransaction<i128>>;
     /**
+     * Construct and simulate a set_min_position_size transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Set minimum position size.
+     *
+     * # Arguments
+     *
+     * * `admin` - The administrator address
+     * * `size` - Minimum position size in base units (must be > 0)
+     *
+     * # Panics
+     *
+     * Panics if caller is not the admin or size is invalid
+     */
+    set_min_position_size: ({ admin, size }: {
+        admin: string;
+        size: i128;
+    }, options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<null>>;
+    /**
      * Construct and simulate a set_oracle_integrator transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
      * Set the Oracle Integrator contract address.
      *
@@ -825,6 +897,28 @@ export interface Client {
         simulate?: boolean;
     }) => Promise<AssembledTransaction<null>>;
     /**
+     * Construct and simulate a borrow_rate_per_second transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Get borrow rate per second (scaled by 1e7).
+     *
+     * # Returns
+     *
+     * Borrow rate per second for calculating borrowing fees
+     */
+    borrow_rate_per_second: (options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<i128>>;
+    /**
      * Construct and simulate a max_price_deviation_bps transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
      * Get maximum price deviation in basis points.
      *
@@ -846,6 +940,36 @@ export interface Client {
          */
         simulate?: boolean;
     }) => Promise<AssembledTransaction<i128>>;
+    /**
+     * Construct and simulate a set_max_price_deviation transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Set maximum price deviation in basis points.
+     *
+     * # Arguments
+     *
+     * * `admin` - The administrator address
+     * * `deviation` - Max price deviation in bps (must be 1-5000)
+     *
+     * # Panics
+     *
+     * Panics if caller is not the admin or deviation is invalid
+     */
+    set_max_price_deviation: ({ admin, deviation }: {
+        admin: string;
+        deviation: i128;
+    }, options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<null>>;
     /**
      * Construct and simulate a price_staleness_threshold transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
      * Get price staleness threshold in seconds.
@@ -884,6 +1008,36 @@ export interface Client {
     set_max_utilization_ratio: ({ admin, ratio }: {
         admin: string;
         ratio: i128;
+    }, options?: {
+        /**
+         * The fee to pay for the transaction. Default: BASE_FEE
+         */
+        fee?: number;
+        /**
+         * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+         */
+        timeoutInSeconds?: number;
+        /**
+         * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+         */
+        simulate?: boolean;
+    }) => Promise<AssembledTransaction<null>>;
+    /**
+     * Construct and simulate a set_borrow_rate_per_second transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+     * Set borrow rate per second.
+     *
+     * # Arguments
+     *
+     * * `admin` - The administrator address
+     * * `rate` - Borrow rate per second (scaled by 1e7, must be >= 0)
+     *
+     * # Panics
+     *
+     * Panics if caller is not the admin or rate is negative
+     */
+    set_borrow_rate_per_second: ({ admin, rate }: {
+        admin: string;
+        rate: i128;
     }, options?: {
         /**
          * The fee to pay for the transaction. Default: BASE_FEE
@@ -967,12 +1121,11 @@ export declare class Client extends ContractClient {
     readonly fromJSON: {
         admin: (json: string) => AssembledTransaction<string>;
         token: (json: string) => AssembledTransaction<string>;
+        set_fees: (json: string) => AssembledTransaction<null>;
         set_admin: (json: string) => AssembledTransaction<null>;
         set_token: (json: string) => AssembledTransaction<null>;
         dia_oracle: (json: string) => AssembledTransaction<string>;
-        get_config: (json: string) => AssembledTransaction<bigint>;
         initialize: (json: string) => AssembledTransaction<null>;
-        set_config: (json: string) => AssembledTransaction<null>;
         max_leverage: (json: string) => AssembledTransaction<bigint>;
         min_leverage: (json: string) => AssembledTransaction<bigint>;
         maker_fee_bps: (json: string) => AssembledTransaction<bigint>;
@@ -980,7 +1133,8 @@ export declare class Client extends ContractClient {
         liquidity_pool: (json: string) => AssembledTransaction<string>;
         market_manager: (json: string) => AssembledTransaction<string>;
         set_dia_oracle: (json: string) => AssembledTransaction<null>;
-        get_time_config: (json: string) => AssembledTransaction<bigint>;
+        set_risk_params: (json: string) => AssembledTransaction<null>;
+        set_time_params: (json: string) => AssembledTransaction<null>;
         funding_interval: (json: string) => AssembledTransaction<bigint>;
         position_manager: (json: string) => AssembledTransaction<string>;
         reflector_oracle: (json: string) => AssembledTransaction<string>;
@@ -990,14 +1144,19 @@ export declare class Client extends ContractClient {
         set_liquidity_pool: (json: string) => AssembledTransaction<null>;
         set_market_manager: (json: string) => AssembledTransaction<null>;
         liquidation_fee_bps: (json: string) => AssembledTransaction<bigint>;
+        set_leverage_limits: (json: string) => AssembledTransaction<null>;
         set_position_manager: (json: string) => AssembledTransaction<null>;
         set_reflector_oracle: (json: string) => AssembledTransaction<null>;
         liquidation_threshold: (json: string) => AssembledTransaction<bigint>;
         max_utilization_ratio: (json: string) => AssembledTransaction<bigint>;
+        set_min_position_size: (json: string) => AssembledTransaction<null>;
         set_oracle_integrator: (json: string) => AssembledTransaction<null>;
+        borrow_rate_per_second: (json: string) => AssembledTransaction<bigint>;
         max_price_deviation_bps: (json: string) => AssembledTransaction<bigint>;
+        set_max_price_deviation: (json: string) => AssembledTransaction<null>;
         price_staleness_threshold: (json: string) => AssembledTransaction<bigint>;
         set_max_utilization_ratio: (json: string) => AssembledTransaction<null>;
+        set_borrow_rate_per_second: (json: string) => AssembledTransaction<null>;
         min_liquidity_reserve_ratio: (json: string) => AssembledTransaction<bigint>;
         set_min_liquidity_reserve_ratio: (json: string) => AssembledTransaction<null>;
     };
